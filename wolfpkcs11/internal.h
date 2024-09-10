@@ -23,9 +23,7 @@
 #ifndef WOLFPKCS11_INTERNAL_H
 #define WOLFPKCS11_INTERNAL_H
 
-#ifndef WOLFSSL_USER_SETTINGS
-    #include <wolfssl/options.h>
-#endif
+#include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/ecc.h>
