@@ -6232,6 +6232,18 @@ static int RsaObject_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type,
 static int GetEcParams(ecc_key* key, byte* data, CK_ULONG* len)
 {
     int ret = 0;
+#if defined(HAVE_OID_ENCODING)
+    word32 dataLen = (word32)*len;
+    ret = wc_EncodeObjectId(key->dp->oid, key->dp->oidSz, data+2, &dataLen);
+    if (ret != 0) {
+        return ret;
+    }
+    data[0] = ASN_OBJECT_ID;
+    data[1] = dataLen;
+    *len = dataLen + 2;
+#else
+    /* ASN.1 encoding: OBJ + ecc parameters OID */
+    CK_ULONG dataLen = key->dp->oidSz + 2;
     const byte* oid = NULL;
     word32 oidSz = 0;
 
@@ -6249,6 +6261,7 @@ static int GetEcParams(ecc_key* key, byte* data, CK_ULONG* len)
             XMEMCPY(data + 2, oid, oidSz);
         }
     }
+#endif
 
     return ret;
 }
