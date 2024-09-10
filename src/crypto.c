@@ -24,11 +24,7 @@
     #include <wolfpkcs11/config.h>
 #endif
 
-#ifndef WOLFSSL_USER_SETTINGS
 #include <wolfssl/options.h>
-#else
-#include "user_settings.h"
-#endif
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
 
@@ -253,7 +249,7 @@ static CK_RV CheckAttributes(CK_ATTRIBUTE* pTemplate, CK_ULONG ulCount, int set)
         else if (attrType[j].type == ATTR_TYPE_BOOL) {
             if (attr->pValue == NULL && set)
                 return CKR_ATTRIBUTE_VALUE_INVALID;
-            if ((attr->pValue != NULL) && 
+            if ((attr->pValue != NULL) &&
                 (attr->ulValueLen != sizeof(CK_BBOOL)))
                 return CKR_BUFFER_TOO_SMALL;
             if (set && *(CK_BBOOL*)attr->pValue != CK_TRUE &&
@@ -264,7 +260,7 @@ static CK_RV CheckAttributes(CK_ATTRIBUTE* pTemplate, CK_ULONG ulCount, int set)
         else if (attrType[j].type == ATTR_TYPE_DATE) {
             if (attr->pValue == NULL && set)
                 return CKR_ATTRIBUTE_VALUE_INVALID;
-            if ((attr->pValue != NULL) && 
+            if ((attr->pValue != NULL) &&
                 (attr->ulValueLen != sizeof(CK_DATE)))
                 return CKR_BUFFER_TOO_SMALL;
         }

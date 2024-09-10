@@ -2,6 +2,7 @@
 language.settings.xml
 wolfpkcs11/config.h.in
 autom4te.cache
+build
 build-aux
 aclocal.m4
 libtool.m4
