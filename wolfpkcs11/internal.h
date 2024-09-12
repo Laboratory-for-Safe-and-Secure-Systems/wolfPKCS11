@@ -266,6 +266,8 @@ int WP11_Object_SetDilithiumKey(WP11_Object* object, unsigned char** data,
                                 CK_ULONG* len);
 int WP11_Object_SetDhKey(WP11_Object* object, unsigned char** data,
                          CK_ULONG* len);
+int WP11_Object_SetKyberKey(WP11_Object* object, unsigned char** data,
+                            CK_ULONG* len);
 int WP11_Object_SetSecretKey(WP11_Object* object, unsigned char** data,
                              CK_ULONG* len);
 int WP11_Object_SetClass(WP11_Object* object, CK_OBJECT_CLASS objClass);

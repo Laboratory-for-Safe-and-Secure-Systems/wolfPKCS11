@@ -238,6 +238,16 @@ if(NOT WOLFPKCS11_DH)
 endif()
 
 
+# ML-KEM (Kyber)
+add_option("WOLFPKCS11_KYBER"
+    "Enable Kyber (default: enabled)"
+    "yes" "yes;no")
+
+if(WOLFPKCS11_KYBER)
+    list(APPEND WOLFPKCS11_DEFINITIONS "-DHAVE_KYBER")
+endif()
+
+
 # AES
 add_option("WOLFPKCS11_AES"
     "Enable AES (default: enabled)"

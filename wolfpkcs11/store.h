@@ -33,6 +33,8 @@
 #define WOLFPKCS11_STORE_DHKEY_PUB            0x08
 #define WOLFPKCS11_STORE_DILITHIUMKEY_PRIV    0x09
 #define WOLFPKCS11_STORE_DILITHIUMKEY_PUB     0x0A
+#define WOLFPKCS11_STORE_KYBERKEY_PRIV        0x0B
+#define WOLFPKCS11_STORE_KYBERKEY_PUB         0x0C
 
 /*
  * Opens access to location to read/write token data.
