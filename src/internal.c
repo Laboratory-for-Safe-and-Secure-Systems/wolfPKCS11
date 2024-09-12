@@ -34,6 +34,7 @@
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/aes.h>
+#include <wolfssl/wolfcrypt/dilithium.h>
 
 #include <wolfpkcs11/internal.h>
 #include <wolfpkcs11/store.h>
@@ -172,6 +173,9 @@ struct WP11_Object {
     #ifdef HAVE_ECC
         ecc_key ecKey;                 /* EC key object                       */
     #endif
+    #ifdef HAVE_DILITHIUM
+        dilithium_key dilithiumKey;    /* Dilithium key object                */
+    #endif
     #ifndef NO_DH
         WP11_DhKey dhKey;              /* DH parameters object                */
     #endif
@@ -241,6 +245,14 @@ typedef struct WP11_PssParams {
 #endif
 #endif
 
+#ifdef HAVE_DILITHIUM
+typedef struct WP11_DilithiumParams {
+    enum wc_HashType preHashType;
+    byte* ctx;
+    byte ctxSz;
+} WP11_DilithiumParams;
+#endif
+
 #ifndef NO_AES
 #ifdef HAVE_AES_CBC
 typedef struct WP11_CbcParams {
@@ -306,6 +318,9 @@ struct WP11_Session {
     #ifdef WC_RSA_PSS
         WP11_PssParams pss;            /* RSA-PSS parameters                  */
     #endif
+#endif
+#ifdef HAVE_DILITHIUM
+        WP11_DilithiumParams dilithium; /* Dilithium parameters               */
 #endif
 #ifndef NO_AES
     #ifdef HAVE_AES_CBC
@@ -625,7 +640,14 @@ static void wp11_Session_Final(WP11_Session* session)
         session->params.oaep.label = NULL;
     }
 #endif
-#ifndef NO_RSA
+#ifdef HAVE_DILITHIUM
+    if (session->mechanism == CKM_ML_DSA &&
+                                        session->params.dilithium.ctx != NULL) {
+        XFREE(session->params.dilithium.ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        session->params.dilithium.ctx = NULL;
+    }
+#endif
+#ifndef NO_AES
 #ifdef HAVE_AES_CBC
     if ((session->mechanism == CKM_AES_CBC ||
                       session->mechanism == CKM_AES_CBC_PAD) && session->init) {
@@ -903,6 +925,14 @@ int wolfPKCS11_Store_OpenSz(int type, CK_ULONG id1, CK_ULONG id2, int read,
             break;
         case WOLFPKCS11_STORE_CERT:
             XSNPRINTF(name, sizeof(name), "%s/wp11_cert_%016lx_%016lx",
+                      str, id1, id2);
+            break;
+        case WOLFPKCS11_STORE_DILITHIUMKEY_PRIV:
+            XSNPRINTF(name, sizeof(name), "%s/wp11_mldsakey_priv_%016lx_%016lx",
+                      str, id1, id2);
+            break;
+        case WOLFPKCS11_STORE_DILITHIUMKEY_PUB:
+            XSNPRINTF(name, sizeof(name), "%s/wp11_mldsakey_pub_%016lx_%016lx",
                       str, id1, id2);
             break;
         default:
@@ -2538,6 +2568,251 @@ static int wp11_Object_Store_EccKey(WP11_Object* object, int tokenId, int objId)
 }
 #endif /* HAVE_ECC */
 
+#ifdef HAVE_DILITHIUM
+static int DilithiumKeyTryDecode(dilithium_key* key, byte level, byte* data,
+                                 word32 len, CK_OBJECT_CLASS class)
+{
+    int ret = 0;
+    word32 idx = 0;
+
+    /* Init key */
+    ret = wc_dilithium_init_ex(key, NULL, INVALID_DEVID);
+
+    if (ret == 0) {
+        /* Set level */
+        ret = wc_dilithium_set_level(key, level);
+    }
+    if (ret == 0) {
+        if (class == CKO_PRIVATE_KEY) {
+            /* Decode Dilithium private key. */
+            ret = wc_Dilithium_PrivateKeyDecode(data, &idx, key, len);
+        }
+        else {
+            /* Decode Dilithium public key. */
+            ret = wc_Dilithium_PublicKeyDecode(data, &idx, key, len);
+        }
+    }
+
+    return ret;
+}
+
+/**
+ * Decode the Dilithium key.
+ *
+ * Encoded private keys are encrypted.
+ *
+ * @param [in, out]  object  Dilithium key object.
+ * @return  0 on success.
+ * @return  -ve on failure.
+ */
+static int wp11_Object_Decode_DilithiumKey(WP11_Object* object)
+{
+    int ret = 0;
+
+    if (object->objClass == CKO_PRIVATE_KEY) {
+        unsigned char* der;
+        int len = object->keyDataLen - AES_BLOCK_SIZE;
+
+        der = (unsigned char*)XMALLOC(len, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (der == NULL) {
+            ret = MEMORY_E;
+        }
+        if (ret == 0) {
+            ret = wp11_DecryptData(der, object->keyData, len,
+                                   object->slot->token.key,
+                                   sizeof(object->slot->token.key), object->iv,
+                                   sizeof(object->iv));
+        }
+        if (ret == 0) {
+            /* Decode Dilithium private key. */
+            ret = DilithiumKeyTryDecode(&object->data.dilithiumKey,
+                                        WC_ML_DSA_44, der, len,
+                                        object->objClass);
+            if (ret != 0) {
+                ret = DilithiumKeyTryDecode(&object->data.dilithiumKey,
+                                            WC_ML_DSA_65, der, len,
+                                            object->objClass);
+            }
+            if (ret != 0) {
+                ret = DilithiumKeyTryDecode(&object->data.dilithiumKey,
+                                            WC_ML_DSA_87,der, len,
+                                            object->objClass);
+            }
+            XMEMSET(der, 0, len);
+        }
+        if (der != NULL)
+            XFREE(der, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    }
+    else {
+        /* Decode Dilithium public key. */
+        ret = DilithiumKeyTryDecode(&object->data.dilithiumKey, WC_ML_DSA_44,
+                                    object->keyData, object->keyDataLen,
+                                    object->objClass);
+        if (ret != 0) {
+            ret = DilithiumKeyTryDecode(&object->data.dilithiumKey, WC_ML_DSA_65,
+                                        object->keyData, object->keyDataLen,
+                                        object->objClass);
+        }
+        if (ret != 0) {
+            ret = DilithiumKeyTryDecode(&object->data.dilithiumKey, WC_ML_DSA_87,
+                                        object->keyData, object->keyDataLen,
+                                        object->objClass);
+        }
+    }
+    object->encoded = (ret != 0);
+
+    return ret;
+}
+
+/**
+ * Encode the Dilithium (ML-DSA) key.
+ *
+ * Private keys are encoded and then encrypted.
+ *
+ * @param [in, out]  object  Dilithium key object.
+ * @return  0 on success.
+ * @return  -ve on failure.
+ */
+static int wp11_Object_Encode_DilithiumKey(WP11_Object* object)
+{
+    int ret;
+
+    if (object->objClass == CKO_PRIVATE_KEY) {
+        /* Get length of encoded private key. */
+        ret = wc_Dilithium_PrivateKeyToDer(&object->data.dilithiumKey, NULL, 0);
+        if (ret >= 0) {
+            object->keyDataLen = ret + AES_BLOCK_SIZE;
+            ret = 0;
+        }
+    }
+    else {
+        /* Get length of encoded public key. */
+        ret = wc_Dilithium_PublicKeyToDer(&object->data.dilithiumKey, NULL, 0, 1);
+        if (ret >= 0) {
+            object->keyDataLen = ret;
+            ret = 0;
+        }
+    }
+
+    if (ret == 0) {
+        XFREE(object->keyData, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        /* Allocate buffer to hold encoded key. */
+        object->keyData = (unsigned char*)XMALLOC(object->keyDataLen, NULL,
+                                                       DYNAMIC_TYPE_TMP_BUFFER);
+        if (object->keyData == NULL)
+            ret = MEMORY_E;
+    }
+
+    if (ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
+        /* Encode private key. */
+        ret = wc_Dilithium_PrivateKeyToDer(&object->data.dilithiumKey,
+                                           object->keyData,
+                                           object->keyDataLen);
+        if (ret >= 0) {
+            ret = wp11_EncryptData(object->keyData, object->keyData, ret,
+                                    object->slot->token.key,
+                                    sizeof(object->slot->token.key), object->iv,
+                                    sizeof(object->iv));
+        }
+    }
+    else if (ret == 0 && object->objClass == CKO_PUBLIC_KEY) {
+        /* Encode public key. */
+        ret = wc_Dilithium_PublicKeyToDer(&object->data.dilithiumKey,
+                                          object->keyData,
+                                          object->keyDataLen, 1);
+        if (ret >= 0) {
+            ret = 0;
+        }
+    }
+
+    if (ret != 0) {
+        XFREE(object->keyData, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        object->keyData = NULL;
+        object->keyDataLen = 0;
+    }
+
+    return ret;
+}
+
+/**
+ * Load a Dilithium (ML-DSA) key from storage.
+ *
+ * @param [in, out]  object   Dilithium key object.
+ * @param [in]       tokenId  Id of token this key belongs to.
+ * @param [in]       objId    Id of object for token.
+ * @return  0 on success.
+ * @return  MEMORY_E when dynamic memory allocation fails.
+ * @return  BUFFER_E when loading fails.
+ * @return  NOT_AVAILABLE_E when unable to locate data.
+ */
+static int wp11_Object_Load_DilithiumKey(WP11_Object* object, int tokenId,
+                                         int objId)
+{
+    int ret;
+    void* storage = NULL;
+    int storeType;
+
+    /* Determine store type - private keys may be encrypted. */
+    if (object->objClass == CKO_PRIVATE_KEY)
+        storeType = WOLFPKCS11_STORE_DILITHIUMKEY_PRIV;
+    else
+        storeType = WOLFPKCS11_STORE_DILITHIUMKEY_PUB;
+
+    /* Open access to Dilithium key. */
+    ret = wp11_storage_open_readonly(storeType, tokenId, objId, &storage);
+    if (ret == 0) {
+        /* Read DER encoded Dilithium key. */
+        ret = wp11_storage_read_alloc_array(storage, &object->keyData,
+                                                           &object->keyDataLen);
+        wp11_storage_close(storage);
+    }
+
+    return ret;
+}
+
+/**
+ * Store a Dilithium key to storage.
+ *
+ * @param [in]  object   Dilithium key object.
+ * @param [in]  tokenId  Id of token this key belongs to.
+ * @param [in]  objId    Id of object for token.
+ * @return  0 on success.
+ * @return  MEMORY_E when dynamic memory allocation fails.
+ * @return  BUFFER_E when storing fails.
+ * @return  NOT_AVAILABLE_E when unable to write data.
+ */
+static int wp11_Object_Store_DilithiumKey(WP11_Object* object, int tokenId,
+                                          int objId)
+{
+    int ret;
+    void* storage = NULL;
+    int storeType;
+
+    if (object->keyData == NULL) {
+        ret = wp11_Object_Encode_DilithiumKey(object);
+    }
+
+    /* Determine store type - private keys may be encrypted. */
+    if (object->objClass == CKO_PRIVATE_KEY)
+        storeType = WOLFPKCS11_STORE_DILITHIUMKEY_PRIV;
+    else
+        storeType = WOLFPKCS11_STORE_DILITHIUMKEY_PUB;
+
+    /* Open access to Dilithium key. */
+    ret = wp11_storage_open(storeType, tokenId, objId, object->keyDataLen,
+                            &storage);
+    if (ret == 0) {
+        /* Write encoded Dilithium key to storage. */
+        ret = wp11_storage_write_array(storage, object->keyData,
+                                                            object->keyDataLen);
+
+        wp11_storage_close(storage);
+    }
+
+    return ret;
+}
+#endif /* HAVE_DILITHIUM */
+
 #ifndef NO_DH
 /**
  * Decode the DH key.
@@ -3096,6 +3371,11 @@ static int wp11_Object_Load(WP11_Object* object, int tokenId, int objId)
                     ret = wp11_Object_Load_EccKey(object, tokenId, objId);
                     break;
             #endif
+            #ifdef HAVE_DILITHIUM
+                case CKK_ML_DSA:
+                    ret = wp11_Object_Load_DilithiumKey(object, tokenId, objId);
+                    break;
+            #endif
             #ifndef NO_DH
                 case CKK_DH:
                     ret = wp11_Object_Load_DhKey(object, tokenId, objId);
@@ -3227,6 +3507,11 @@ static int wp11_Object_Store(WP11_Object* object, int tokenId, int objId)
                     ret = wp11_Object_Store_EccKey(object, tokenId, objId);
                     break;
             #endif
+            #ifdef HAVE_DILITHIUM
+                case CKK_ML_DSA:
+                    ret = wp11_Object_Store_DilithiumKey(object, tokenId, objId);
+                    break;
+            #endif
             #ifndef NO_DH
                 case CKK_DH:
                     ret = wp11_Object_Store_DhKey(object, tokenId, objId);
@@ -3275,6 +3560,11 @@ static int wp11_Object_Decode(WP11_Object* object)
         #ifdef HAVE_ECC
             case CKK_EC:
                 ret = wp11_Object_Decode_EccKey(object);
+                break;
+        #endif
+        #ifdef HAVE_DILITHIUM
+            case CKK_ML_DSA:
+                ret = wp11_Object_Decode_DilithiumKey(object);
                 break;
         #endif
         #ifndef NO_DH
@@ -3331,6 +3621,15 @@ static int wp11_Object_Encode(WP11_Object* object, int protect)
                 ret = wp11_Object_Encode_EccKey(object);
                 if (protect && ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
                     wc_ecc_free(&object->data.ecKey);
+                    object->encoded = 1;
+                }
+                break;
+        #endif
+        #ifdef HAVE_DILITHIUM
+            case CKK_ML_DSA:
+                ret = wp11_Object_Encode_DilithiumKey(object);
+                if (protect && ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
+                    wc_dilithium_free(&object->data.dilithiumKey);
                     object->encoded = 1;
                 }
                 break;
@@ -3401,6 +3700,14 @@ static void wp11_Object_Unstore(WP11_Object* object, int tokenId, int objId)
                 storeObjType = WOLFPKCS11_STORE_ECCKEY_PRIV;
             else
                 storeObjType = WOLFPKCS11_STORE_ECCKEY_PUB;
+            break;
+    #endif
+    #ifdef HAVE_DILITHIUM
+        case CKK_ML_DSA:
+            if (object->objClass == CKO_PRIVATE_KEY)
+                storeObjType = WOLFPKCS11_STORE_DILITHIUMKEY_PRIV;
+            else
+                storeObjType = WOLFPKCS11_STORE_DILITHIUMKEY_PUB;
             break;
     #endif
     #ifndef NO_DH
@@ -4868,8 +5175,8 @@ void WP11_Session_SetMechanism(WP11_Session* session,
     session->mechanism = mechanism;
 }
 
-#ifndef NO_RSA
-#if !defined(WC_NO_RSA_OAEP) || defined(WC_RSA_PSS)
+#if (!defined(NO_RSA) && (!defined(WC_NO_RSA_OAEP) || defined(WC_RSA_PSS))) || \
+    defined(HAVE_DILITHIUM)
 /**
  * Convert the digest mechanism to a hash type for wolfCrypt.
  *
@@ -4899,6 +5206,20 @@ static int wp11_hash_type(CK_MECHANISM_TYPE hashMech,
         case CKM_SHA512:
             *hashType = WC_HASH_TYPE_SHA512;
             break;
+    #ifndef WOLFSSL_NOSHA512_256
+        case CKM_SHA512_256:
+            *hashType = WC_HASH_TYPE_SHA512_256;
+            break;
+    #endif
+        case CKM_SHA3_256:
+            *hashType = WC_HASH_TYPE_SHA3_256;
+            break;
+        case CKM_SHA3_384:
+            *hashType = WC_HASH_TYPE_SHA3_384;
+            break;
+        case CKM_SHA3_512:
+            *hashType = WC_HASH_TYPE_SHA3_512;
+            break;
         default:
             ret = BAD_FUNC_ARG;
             break;
@@ -4906,7 +5227,10 @@ static int wp11_hash_type(CK_MECHANISM_TYPE hashMech,
 
     return ret;
 }
+#endif
 
+#ifndef NO_RSA
+#if !defined(WC_NO_RSA_OAEP) || defined(WC_RSA_PSS)
 /**
  * Convert the mask generation function id to a wolfCrypt MGF id.
  *
@@ -5017,6 +5341,84 @@ int WP11_Session_SetPssParams(WP11_Session* session, CK_MECHANISM_TYPE hashAlg,
 }
 #endif /* WC_RSA_PSS */
 #endif /* !NO_RSA */
+
+#ifdef HAVE_DILITHIUM
+/**
+ * Set the parameters to use for a Dilithium (ML-DSA) operation.
+ *
+ * @param  session   [in]  Session object.
+ * @param  params    [in]  Pointer to the parameters (may be NULL).
+ * @param  paramsLen [in]  Length of parameters (may be 0).
+ * @return  BAD_FUNC_ARG when the parameters contain problems.
+ *          0 on success.
+ */
+int WP11_Session_SetDilithiumParams(WP11_Session* session, CK_VOID_PTR params,
+                                    CK_ULONG paramsLen)
+{
+    int ret = 0;
+    WP11_DilithiumParams* dilithium = &session->params.dilithium;
+
+    XMEMSET(dilithium, 0, sizeof(*dilithium));
+
+    if (params != NULL) {
+        if (paramsLen == sizeof(CK_SIGN_ADDITIONAL_CONTEXT)) {
+            CK_SIGN_ADDITIONAL_CONTEXT* ctx = (CK_SIGN_ADDITIONAL_CONTEXT*)params;
+
+            /* Copy context if present */
+            if (ctx->pContext != NULL && ctx->ulContextLen > 0) {
+                dilithium->ctx = (byte*)XMALLOC(ctx->ulContextLen, NULL,
+                                                DYNAMIC_TYPE_TMP_BUFFER);
+                if (dilithium->ctx == NULL)
+                    ret = MEMORY_E;
+                if (ret == 0) {
+                    XMEMCPY(dilithium->ctx, ctx->pContext, ctx->ulContextLen);
+                    dilithium->ctxSz = ctx->ulContextLen;
+                }
+            }
+            else {
+                dilithium->ctx = NULL;
+                dilithium->ctxSz = 0;
+            }
+
+            dilithium->preHashType = WC_HASH_TYPE_NONE;
+        }
+        else if (paramsLen == sizeof(CK_HASH_SIGN_ADDITIONAL_CONTEXT)) {
+            CK_HASH_SIGN_ADDITIONAL_CONTEXT* ctx = (CK_HASH_SIGN_ADDITIONAL_CONTEXT*)params;
+
+            /* Copy context if present */
+            if (ctx->pContext != NULL && ctx->ulContextLen > 0) {
+                dilithium->ctx = (byte*)XMALLOC(ctx->ulContextLen, NULL,
+                                                DYNAMIC_TYPE_TMP_BUFFER);
+                if (dilithium->ctx == NULL)
+                    ret = MEMORY_E;
+                if (ret == 0) {
+                    XMEMCPY(dilithium->ctx, ctx->pContext, ctx->ulContextLen);
+                    dilithium->ctxSz = ctx->ulContextLen;
+                }
+            }
+            else {
+                dilithium->ctx = NULL;
+                dilithium->ctxSz = 0;
+            }
+
+            /* Get hash type */
+            if (ret == 0) {
+                ret = wp11_hash_type(ctx->hash, &dilithium->preHashType);
+            }
+        }
+        else {
+            ret = BAD_FUNC_ARG;
+        }
+    }
+    else {
+        dilithium->preHashType = WC_HASH_TYPE_NONE;
+        dilithium->ctx = NULL;
+        dilithium->ctxSz = 0;
+    }
+
+    return ret;
+}
+#endif /* HAVE_DILITHIUM */
 
 #ifndef NO_AES
 #ifdef HAVE_AES_CBC
@@ -5480,6 +5882,10 @@ void WP11_Object_Free(WP11_Object* object)
         if (object->type == CKK_EC)
             wc_ecc_free(&object->data.ecKey);
     #endif
+    #ifdef HAVE_DILITHIUM
+        if (object->type == CKK_ML_DSA)
+            wc_dilithium_free(&object->data.dilithiumKey);
+    #endif
     #ifndef NO_DH
         if (object->type == CKK_DH)
             wc_FreeDhKey(&object->data.dhKey.params);
@@ -5800,6 +6206,97 @@ int WP11_Object_SetEcKey(WP11_Object* object, unsigned char** data,
     return ret;
 }
 #endif /* HAVE_ECC */
+
+#ifdef HAVE_DILITHIUM
+/**
+ * Set the Dilithium (ML-DSA) parameters based on provided data.
+ *
+ * @param  key    [in]  Dilithium key object.
+ * @param  params [in]  Pointer to parameters structure.
+ * @param  len    [in]  Length of parameters.
+ * @return  BUFFER_E when len is too short.
+ *          ASN_PARSE_E when paramter is bad.
+ *          Other -ve on failure.
+ *          0 on success.
+ */
+static int dilithiumSetParameters(dilithium_key* key,
+                                  CK_ML_DSA_PARAMETER_SET_TYPE* params,
+                                  int len)
+{
+    int ret = 0;
+
+    if (params == NULL || key == NULL)
+        return BAD_FUNC_ARG;
+
+    if (len != sizeof(CK_ML_DSA_PARAMETER_SET_TYPE))
+        return BUFFER_E;
+
+    /* Set Dilithium level based on the parameter */
+    switch (*params) {
+        case CKP_ML_DSA_44:
+            ret = wc_dilithium_set_level(key, WC_ML_DSA_44);
+            break;
+        case CKP_ML_DSA_65:
+            ret = wc_dilithium_set_level(key, WC_ML_DSA_65);
+            break;
+        case CKP_ML_DSA_87:
+            ret = wc_dilithium_set_level(key, WC_ML_DSA_87);
+            break;
+        default:
+            ret = ASN_PARSE_E;
+    }
+
+    return ret;
+}
+
+/**
+ * Set the Dilithium (ML-DSA) key data into the object.
+ * Store the data in the wolfCrypt data structure.
+ *
+ * @param  object  [in]  Object object.
+ * @param  data    [in]  Array of byte arrays.
+ * @param  len     [in]  Array of lengths of byte arrays.
+ * @return  -ve on failure.
+ *          0 on success.
+ */
+int WP11_Object_SetDilithiumKey(WP11_Object* object, unsigned char** data,
+                                CK_ULONG* len)
+{
+    int ret;
+    dilithium_key* key;
+
+    if (object->onToken)
+        WP11_Lock_LockRW(object->lock);
+
+    key = &object->data.dilithiumKey;
+    ret = wc_dilithium_init_ex(key, NULL, object->slot->devId);
+
+    /* Set parameters */
+    if (ret == 0) {
+        ret = dilithiumSetParameters(key,
+                                     (CK_ML_DSA_PARAMETER_SET_TYPE*)data[0],
+                                     (int)len[0]);
+    }
+
+    /* Set key data */
+    if (ret == 0 && data[1] != NULL) {
+        if (object->objClass == CKO_PUBLIC_KEY) {
+            ret = wc_dilithium_import_public(data[1], len[1], key);
+        }
+        else {
+            ret = wc_dilithium_import_private(data[1], len[1], key);
+        }
+    }
+
+    if (ret != 0)
+        wc_dilithium_free(key);
+
+    if (object->onToken)
+        WP11_Lock_UnlockRW(object->lock);
+
+    return ret;
+}
+#endif /* HAVE_DILITHIUM */
 
 #ifndef NO_DH
 /**
@@ -6353,6 +6850,158 @@ static int EcObject_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type,
 }
 #endif
 
+#ifdef HAVE_DILITHIUM
+
+static int GetDilithiumParams(dilithium_key* key, byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+    CK_ML_DSA_PARAMETER_SET_TYPE params;
+
+    if (len == NULL)
+        return BUFFER_E;
+
+    switch (key->level) {
+        case WC_ML_DSA_44:
+            params = CKP_ML_DSA_44;
+            break;
+        case WC_ML_DSA_65:
+            params = CKP_ML_DSA_65;
+            break;
+        case WC_ML_DSA_87:
+            params = CKP_ML_DSA_87;
+            break;
+        default:
+            return ASN_PARSE_E;
+    }
+
+    if (data == NULL)
+        *len = sizeof(CK_ML_DSA_PARAMETER_SET_TYPE);
+    else if (*len < sizeof(CK_ML_DSA_PARAMETER_SET_TYPE))
+        ret = BUFFER_E;
+    else
+        XMEMCPY(data, &params, sizeof(CK_ML_DSA_PARAMETER_SET_TYPE));
+
+    return ret;
+}
+
+static int GetDilithiumPublicKey(dilithium_key* key, byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+    word32 dataLen = 0;
+    byte level = 0;
+
+    ret = wc_dilithium_get_level(key, &level);
+    if (ret != 0)
+        return ret;
+
+    if (level == WC_ML_DSA_44)
+        dataLen = DILITHIUM_LEVEL2_PUB_KEY_SIZE;
+    else if (level == WC_ML_DSA_65)
+        dataLen = DILITHIUM_LEVEL3_PUB_KEY_SIZE;
+    else if (level == WC_ML_DSA_87)
+        dataLen = DILITHIUM_LEVEL5_PUB_KEY_SIZE;
+    else
+        return ASN_PARSE_E;
+
+    if (data == NULL)
+        *len = dataLen;
+    else if (*len < dataLen)
+        ret = BUFFER_E;
+    else {
+        ret = wc_dilithium_export_public(key, data, &dataLen);
+        if (ret == 0)
+            *len = dataLen;
+    }
+
+
+    return ret;
+}
+
+static int GetDilithiumPrivateKey(dilithium_key* key, byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+    word32 dataLen = 0;
+    byte level = 0;
+
+    ret = wc_dilithium_get_level(key, &level);
+    if (ret != 0)
+        return ret;
+
+    if (level == WC_ML_DSA_44)
+        dataLen = DILITHIUM_LEVEL2_KEY_SIZE;
+    else if (level == WC_ML_DSA_65)
+        dataLen = DILITHIUM_LEVEL3_KEY_SIZE;
+    else if (level == WC_ML_DSA_87)
+        dataLen = DILITHIUM_LEVEL5_KEY_SIZE;
+    else
+        return ASN_PARSE_E;
+
+    if (data == NULL)
+        *len = dataLen;
+    else if (*len < dataLen)
+        ret = BUFFER_E;
+    else {
+        ret = wc_dilithium_export_private(key, data, &dataLen);
+        if (ret == 0)
+            *len = dataLen;
+    }
+
+    return ret;
+}
+
+/**
+ * Get a Dilithium object's data as an attribute.
+ *
+ * @param  object  [in]      Object object.
+ * @param  type    [in]      Attribute type.
+ * @param  data    [in]      Attribute data buffer.
+ * @param  len     [in,out]  On in, length of attribute data buffer in bytes.
+ *                           On out, length of attribute data in bytes.
+ * @return  BUFFER_E when buffer is too small for data.
+ *          NOT_AVAILABLE_E when attribute type is not supported.
+ *          0 on success.
+ */
+static int DilithiumObject_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type,
+                                   byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+    int noPriv = (((object->flag & WP11_FLAG_SENSITIVE) != 0) ||
+                                 ((object->flag & WP11_FLAG_EXTRACTABLE) == 0));
+    int noPub = 0;
+
+    if (!object->data.dilithiumKey.prvKeySet)
+        noPriv = 1;
+    if (!object->data.dilithiumKey.pubKeySet)
+        noPub = 1;
+
+    switch (type) {
+        case CKA_PARAMETER_SET:
+            ret = GetDilithiumParams(&object->data.dilithiumKey, data, len);
+            break;
+        case CKA_VALUE:
+            if (object->objClass == CKO_PRIVATE_KEY) {
+                if (noPriv)
+                    *len = CK_UNAVAILABLE_INFORMATION;
+                else
+                    ret = GetDilithiumPrivateKey(&object->data.dilithiumKey, data, len);
+            }
+            else if (object->objClass == CKO_PUBLIC_KEY) {
+                if (noPub)
+                    *len = CK_UNAVAILABLE_INFORMATION;
+                else
+                    ret = GetDilithiumPublicKey(&object->data.dilithiumKey, data, len);
+            }
+            break;
+        default:
+            ret = NOT_AVAILABLE_E;
+            break;
+    }
+
+    return ret;
+}
+
+#endif /* HAVE_DILITHIUM */
+
 #ifndef NO_DH
 /**
  * Get a DH object's data as an attribute.
@@ -6596,6 +7245,11 @@ int WP11_Object_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
         #ifdef HAVE_ECC
                         case CKK_EC:
                             ret = EcObject_GetAttr(object, type, data, len);
+                            break;
+        #endif
+        #ifdef HAVE_DILITHIUM
+                        case CKK_ML_DSA:
+                            ret = DilithiumObject_GetAttr(object, type, data, len);
                             break;
         #endif
         #ifndef NO_DH
@@ -6900,6 +7554,9 @@ int WP11_Object_SetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
 #ifdef HAVE_ECC
                 case CKK_EC:
 #endif
+#ifdef HAVE_DILITHIUM
+                case CKK_ML_DSA:
+#endif
 #ifndef NO_DH
                 case CKK_DH:
 #endif
@@ -6938,6 +7595,12 @@ int WP11_Object_SetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
             if (object->objClass != CKO_CERTIFICATE) {
                 ret = BAD_FUNC_ARG;
             }
+            break;
+        case CKA_PARAMETER_SET:
+#ifdef HAVE_DILITHIUM
+            if (object->type != CKK_ML_DSA)
+#endif
+                ret = BAD_FUNC_ARG;
             break;
         default:
             ret = BAD_FUNC_ARG;
@@ -8026,6 +8689,169 @@ int WP11_EC_Derive(unsigned char* point, word32 pointLen, unsigned char* key,
     return ret;
 }
 #endif /* HAVE_ECC */
+
+#ifdef HAVE_DILITHIUM
+
+int WP11_Dilithium_GenerateKeyPair(WP11_Object* pub, WP11_Object* priv,
+                                   WP11_Slot* slot)
+{
+    int ret = 0;
+    byte* pubKey = NULL;
+    word32 pubKeyLen = 0;
+    WC_RNG rng;
+
+    /* Both dilithium_key object inside the pub and priv WP11_Objects are
+     * already initialized and set to a proper level within
+     * WP11_Object_SetDilithiumKey() based on the given parameter set. */
+
+    /* Generate into the private key. */
+    ret = Rng_New(&slot->token.rng, &slot->token.rngLock, &rng);
+    if (ret == 0) {
+        ret = wc_dilithium_make_key(&priv->data.dilithiumKey, &rng);
+        Rng_Free(&rng);
+    }
+    if (ret == 0) {
+        /* Allocate memory for the public key */
+        pubKey = XMALLOC(DILITHIUM_LEVEL5_PUB_KEY_SIZE, NULL,
+                         DYNAMIC_TYPE_PUBLIC_KEY);
+        if (pubKey == NULL) {
+            ret = MEMORY_E;
+        }
+        pubKeyLen = DILITHIUM_LEVEL5_PUB_KEY_SIZE;
+    }
+    if (ret == 0) {
+        /* Export the public key */
+        ret = wc_dilithium_export_public(&priv->data.dilithiumKey, pubKey, &pubKeyLen);
+    }
+    if (ret == 0) {
+        /* Copy the public part into public key. */
+        ret = wc_dilithium_import_public(pubKey, pubKeyLen, &pub->data.dilithiumKey);
+    }
+    if (ret == 0) {
+        priv->local = 1;
+        pub->local = 1;
+        priv->keyGenMech = CKM_ML_DSA_KEY_PAIR_GEN;
+        pub->keyGenMech = CKM_ML_DSA_KEY_PAIR_GEN;
+    }
+
+    if (pubKey != NULL) {
+        XFREE(pubKey, NULL, DYNAMIC_TYPE_PUBLIC_KEY);
+    }
+
+    return ret;
+}
+
+/**
+ * Return the length of a signature in bytes.
+ *
+ * @param  key  [in]  Dilithium key object.
+ * @return  Length of Dilithium signature in bytes.
+ */
+int WP11_Dilithium_SigLen(WP11_Object* key)
+{
+    return wc_dilithium_sig_size(&key->data.dilithiumKey);
+}
+
+/**
+ * Dilithium sign data with private key.
+ *
+ * @param  data     [in]      Data to sign (message or hash).
+ * @param  dataLen  [in]      Length of data in bytes.
+ * @param  sig      [in]      Buffer to hold signature data.
+ * @param  sigLen   [in]      Length of buffer in bytes.
+ * @param  sigLen   [in,out]  On in, length of buffer.
+ *                            On out, length data in buffer.
+ * @param  priv     [in]      Private key object.
+ * @param  session  [in]      Session object holding parameters.
+ * @return  BUFFER_E when sigLen is too small.
+ *          Other -ve when signing fails.
+ *          0 on success.
+ */
+int WP11_Dilithium_Sign(unsigned char* data, word32 dataLen, unsigned char* sig,
+                 word32* sigLen, WP11_Object* priv, WP11_Session* session)
+{
+    int ret = 0;
+    WP11_Slot* slot = WP11_Session_GetSlot(session);
+    WP11_DilithiumParams* params = &session->params.dilithium;
+    WC_RNG rng;
+
+    if (priv->onToken)
+        WP11_Lock_LockRO(priv->lock);
+
+    ret = Rng_New(&slot->token.rng, &slot->token.rngLock, &rng);
+    if (ret == 0) {
+        if (params->preHashType == WC_HASH_TYPE_NONE) {
+            ret = wc_dilithium_sign_ctx_msg(params->ctx, params->ctxSz, data,
+                        dataLen, sig, sigLen, &priv->data.dilithiumKey, &rng);
+        }
+        else {
+            ret = wc_dilithium_sign_ctx_hash(params->ctx, params->ctxSz,
+                        params->preHashType, data, dataLen, sig, sigLen,
+                        &priv->data.dilithiumKey, &rng);
+        }
+        Rng_Free(&rng);
+    }
+
+    XFREE(params->ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    params->ctx = NULL;
+    params->ctxSz = 0;
+
+    if (priv->onToken)
+        WP11_Lock_UnlockRO(priv->lock);
+
+    return ret;
+}
+
+/**
+ * Dilithium verify signature for data with public key.
+ *
+ * @param  sig      [in]   Signature data.
+ * @param  sigLen   [in]   Length of buffer in bytes.
+ * @param  data     [in]   Data to verify.
+ * @param  dataLen  [in]   Length of data in bytes.
+ * @param  pub      [in]   Public key object.
+ * @param  stat     [out]  Status of verification. 1 on success, otherwise 0.
+ * @param  pub      [in]   Public key object.
+ * @param  session  [in]   Session object holding parameters.
+ * @return  -ve when verifying fails.
+ *          0 on success.
+ */
+int WP11_Dilithium_Verify(unsigned char* sig, word32 sigLen, unsigned char* data,
+            word32 dataLen, int* stat, WP11_Object* pub, WP11_Session* session)
+{
+    int ret = 0;
+    WP11_DilithiumParams* params = &session->params.dilithium;
+
+    *stat = 0;
+    if (pub->onToken)
+        WP11_Lock_LockRO(pub->lock);
+
+    if (sigLen != (word32)WP11_Dilithium_SigLen(pub))
+        ret = BAD_FUNC_ARG;
+
+    if (ret == 0) {
+        if (params->preHashType == WC_HASH_TYPE_NONE) {
+            ret = wc_dilithium_verify_ctx_msg(sig, sigLen, params->ctx,
+                        params->ctxSz, data, dataLen, stat,
+                        &pub->data.dilithiumKey);
+        }
+        else {
+            ret = wc_dilithium_verify_ctx_hash(sig, sigLen, params->ctx,
+                        params->ctxSz, params->preHashType, data, dataLen,
+                        stat, &pub->data.dilithiumKey);
+        }
+    }
+
+    XFREE(params->ctx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    params->ctx = NULL;
+    params->ctxSz = 0;
+
+    if (pub->onToken)
+        WP11_Lock_UnlockRO(pub->lock);
+
+    return ret;
+}
+#endif /* HAVE_DILITHIUM */
 
 #ifndef NO_DH
 /**

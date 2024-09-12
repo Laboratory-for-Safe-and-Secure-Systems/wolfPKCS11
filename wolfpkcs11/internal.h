@@ -141,6 +141,8 @@ extern "C" {
 #define WP11_INIT_RSA_X_509_VERIFY     0x0035
 #define WP11_INIT_ECDSA_SIGN           0x0040
 #define WP11_INIT_ECDSA_VERIFY         0x0041
+#define WP11_INIT_DILITHIUM_SIGN       0x0050
+#define WP11_INIT_DILITHIUM_VERIFY     0x0051
 
 /* scrypt parameters when generating hash from PIN. */
 #ifndef WP11_HASH_PIN_COST
@@ -239,6 +241,8 @@ int WP11_Session_SetPssParams(WP11_Session* session, CK_MECHANISM_TYPE hashAlg,
                               CK_MECHANISM_TYPE mgf, int sLen);
 int WP11_Session_SetOaepParams(WP11_Session* session, CK_MECHANISM_TYPE hashAlg,
                                CK_MECHANISM_TYPE mgf, byte* label, int labelSz);
+int WP11_Session_SetDilithiumParams(WP11_Session* session, CK_VOID_PTR params,
+                                    CK_ULONG paramsLen);
 int WP11_Session_SetCbcParams(WP11_Session* session, unsigned char* iv, int enc,
                               WP11_Object* object);
 int WP11_Session_SetGcmParams(WP11_Session* session, unsigned char* iv,
@@ -272,6 +276,8 @@ int WP11_Object_SetRsaKey(WP11_Object* object, unsigned char** data,
                           CK_ULONG* len);
 int WP11_Object_SetEcKey(WP11_Object* object, unsigned char** data,
                          CK_ULONG* len);
+int WP11_Object_SetDilithiumKey(WP11_Object* object, unsigned char** data,
+                                CK_ULONG* len);
 int WP11_Object_SetDhKey(WP11_Object* object, unsigned char** data,
                          CK_ULONG* len);
 int WP11_Object_SetSecretKey(WP11_Object* object, unsigned char** data,
@@ -346,6 +352,16 @@ int WP11_Ec_Verify(unsigned char* sig, word32 sigLen, unsigned char* hash,
                    word32 hashLen, int* stat, WP11_Object* pub);
 int WP11_EC_Derive(unsigned char* point, word32 pointLen, unsigned char* key,
                    word32 keyLen, WP11_Object* priv);
+
+int WP11_Dilithium_GenerateKeyPair(WP11_Object* pub, WP11_Object* priv,
+                                   WP11_Slot* slot);
+int WP11_Dilithium_SigLen(WP11_Object* key);
+int WP11_Dilithium_Sign(unsigned char* data, word32 dataLen, unsigned char* sig,
+                        word32* sigLen, WP11_Object* priv,
+                        WP11_Session* session);
+int WP11_Dilithium_Verify(unsigned char* sig, word32 sigLen,
+                          unsigned char* data, word32 dataLen, int* stat,
+                          WP11_Object* pub, WP11_Session* session);
 
 int WP11_Dh_GenerateKeyPair(WP11_Object* pub, WP11_Object* priv,
                             WP11_Slot* slot);
