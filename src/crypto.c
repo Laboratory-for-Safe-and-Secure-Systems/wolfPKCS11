@@ -74,6 +74,17 @@ static CK_ATTRIBUTE_TYPE ecKeyParams[] = {
 #define EC_KEY_PARAMS_CNT     (sizeof(ecKeyParams)/sizeof(*ecKeyParams))
 #endif
 
+#ifdef HAVE_DILITHIUM
+/* Dilithium (ML-DSA) key data attributes. */
+static CK_ATTRIBUTE_TYPE dilithiumKeyParams[] = {
+    CKA_PARAMETER_SET,
+    CKA_VALUE
+};
+/* Count of Dilithium key data attributes. */
+#define DILITHIUM_KEY_PARAMS_CNT \
+            (sizeof(dilithiumKeyParams)/sizeof(*dilithiumKeyParams))
+#endif
+
 #ifndef NO_DH
 /* DH key data attributes. */
 static CK_ATTRIBUTE_TYPE dhKeyParams[] = {
@@ -186,6 +197,7 @@ static AttributeType attrType[] = {
     { CKA_HASH_OF_SUBJECT_PUBLIC_KEY,  ATTR_TYPE_DATA  },
     { CKA_HASH_OF_ISSUER_PUBLIC_KEY,   ATTR_TYPE_DATA  },
     { CKA_NAME_HASH_ALGORITHM,         ATTR_TYPE_ULONG },
+    { CKA_PARAMETER_SET,               ATTR_TYPE_DATA  },
 };
 /* Count of elements in attribute type list. */
 #define ATTR_TYPE_SIZE     (sizeof(attrType) / sizeof(*attrType))
@@ -352,6 +364,12 @@ static CK_RV SetAttributeValue(WP11_Session* session, WP11_Object* obj,
                 cnt = EC_KEY_PARAMS_CNT;
                 break;
         #endif
+        #ifdef HAVE_DILITHIUM
+            case CKK_ML_DSA:
+                attrs = dilithiumKeyParams;
+                cnt = DILITHIUM_KEY_PARAMS_CNT;
+                break;
+        #endif
         #ifndef NO_DH
             case CKK_DH:
                 attrs = dhKeyParams;
@@ -399,6 +417,11 @@ static CK_RV SetAttributeValue(WP11_Session* session, WP11_Object* obj,
     #ifdef HAVE_ECC
             case CKK_EC:
                 ret = WP11_Object_SetEcKey(obj, data, len);
+                break;
+    #endif
+    #ifdef HAVE_DILITHIUM
+            case CKK_ML_DSA:
+                ret = WP11_Object_SetDilithiumKey(obj, data, len);
                 break;
     #endif
     #ifndef NO_DH
@@ -699,7 +722,8 @@ static CK_RV CreateObject(WP11_Session* session, CK_ATTRIBUTE_PTR pTemplate,
         objType = *(CK_ULONG*)attr->pValue;
 
         if (objType != CKK_RSA && objType != CKK_EC && objType != CKK_DH &&
-            objType != CKK_AES && objType != CKK_GENERIC_SECRET) {
+            objType != CKK_AES && objType != CKK_GENERIC_SECRET &&
+            objType != CKK_ML_DSA) {
             return CKR_ATTRIBUTE_VALUE_INVALID;
         }
     }
@@ -2703,6 +2727,24 @@ CK_RV C_SignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism,
             init = WP11_INIT_ECDSA_SIGN;
             break;
 #endif
+#ifdef HAVE_DILITHIUM
+        case CKM_ML_DSA:
+            if (type != CKK_ML_DSA)
+                return CKR_KEY_TYPE_INCONSISTENT;
+            if ((pMechanism->pParameter != NULL) &&
+                (pMechanism->ulParameterLen != sizeof(CK_SIGN_ADDITIONAL_CONTEXT)) &&
+                (pMechanism->ulParameterLen != sizeof(CK_HASH_SIGN_ADDITIONAL_CONTEXT)))
+                    return CKR_MECHANISM_PARAM_INVALID;
+
+            ret = WP11_Session_SetDilithiumParams(session,
+                                                  pMechanism->pParameter,
+                                                  pMechanism->ulParameterLen);
+            if (ret != 0)
+                return CKR_MECHANISM_PARAM_INVALID;
+
+            init = WP11_INIT_DILITHIUM_SIGN;
+            break;
+#endif
 #ifndef NO_HMAC
     #ifndef NO_MD5
         case CKM_MD5_HMAC:
@@ -2862,6 +2904,24 @@ CK_RV C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData,
 
             ret = WP11_Ec_Sign(pData, (int)ulDataLen, pSignature, &sigLen, obj,
                                                  WP11_Session_GetSlot(session));
+            *pulSignatureLen = sigLen;
+            break;
+#endif
+#ifdef HAVE_DILITHIUM
+        case CKM_ML_DSA:
+            if (!WP11_Session_IsOpInitialized(session, WP11_INIT_DILITHIUM_SIGN))
+                return CKR_OPERATION_NOT_INITIALIZED;
+
+            sigLen = WP11_Dilithium_SigLen(obj);
+            if (pSignature == NULL) {
+                *pulSignatureLen = sigLen;
+                return CKR_OK;
+            }
+            if (sigLen > (word32)*pulSignatureLen)
+                return CKR_BUFFER_TOO_SMALL;
+
+            ret = WP11_Dilithium_Sign(pData, (int)ulDataLen, pSignature,
+                                      &sigLen, obj, session);
             *pulSignatureLen = sigLen;
             break;
 #endif
@@ -3233,6 +3293,24 @@ CK_RV C_VerifyInit(CK_SESSION_HANDLE hSession,
             init = WP11_INIT_ECDSA_VERIFY;
             break;
 #endif
+#ifdef HAVE_DILITHIUM
+        case CKM_ML_DSA:
+            if (type != CKK_ML_DSA)
+                return CKR_KEY_TYPE_INCONSISTENT;
+            if ((pMechanism->pParameter != NULL) &&
+                (pMechanism->ulParameterLen != sizeof(CK_SIGN_ADDITIONAL_CONTEXT)) &&
+                (pMechanism->ulParameterLen != sizeof(CK_HASH_SIGN_ADDITIONAL_CONTEXT)))
+                    return CKR_MECHANISM_PARAM_INVALID;
+
+            ret = WP11_Session_SetDilithiumParams(session,
+                                                  pMechanism->pParameter,
+                                                  pMechanism->ulParameterLen);
+            if (ret != 0)
+                return CKR_MECHANISM_PARAM_INVALID;
+
+            init = WP11_INIT_DILITHIUM_VERIFY;
+            break;
+#endif
 #ifndef NO_HMAC
     #ifndef NO_MD5
         case CKM_MD5_HMAC:
@@ -3355,6 +3433,16 @@ CK_RV C_Verify(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData,
 
             ret = WP11_Ec_Verify(pSignature, (int)ulSignatureLen, pData,
                                                     (int)ulDataLen, &stat, obj);
+            break;
+#endif
+#ifdef HAVE_DILITHIUM
+        case CKM_ML_DSA:
+            if (!WP11_Session_IsOpInitialized(session,
+                                              WP11_INIT_DILITHIUM_VERIFY))
+                return CKR_OPERATION_NOT_INITIALIZED;
+
+            ret = WP11_Dilithium_Verify(pSignature, (int)ulSignatureLen, pData,
+                                        (int)ulDataLen, &stat, obj, session);
             break;
 #endif
 #ifndef NO_HMAC
@@ -3920,7 +4008,7 @@ CK_RV C_GenerateKeyPair(CK_SESSION_HANDLE hSession,
             break;
 #endif
 #ifdef HAVE_ECC
-       case CKM_EC_KEY_PAIR_GEN:
+        case CKM_EC_KEY_PAIR_GEN:
             if (pMechanism->pParameter != NULL ||
                                               pMechanism->ulParameterLen != 0) {
                 return CKR_MECHANISM_PARAM_INVALID;
@@ -3937,6 +4025,30 @@ CK_RV C_GenerateKeyPair(CK_SESSION_HANDLE hSession,
             }
             if (rv == CKR_OK) {
                 ret = WP11_Ec_GenerateKeyPair(pub, priv,
+                                                 WP11_Session_GetSlot(session));
+                if (ret != 0)
+                    rv = CKR_FUNCTION_FAILED;
+            }
+            break;
+#endif
+#ifdef HAVE_DILITHIUM
+        case CKM_ML_DSA_KEY_PAIR_GEN:
+            if (pMechanism->pParameter != NULL ||
+                                              pMechanism->ulParameterLen != 0) {
+                return CKR_MECHANISM_PARAM_INVALID;
+            }
+
+            *phPublicKey = *phPrivateKey = CK_INVALID_HANDLE;
+
+            rv = NewObject(session, CKK_ML_DSA, CKO_PUBLIC_KEY, pPublicKeyTemplate,
+                                               ulPublicKeyAttributeCount, &pub);
+            if (rv == CKR_OK) {
+                rv = NewObject(session, CKK_ML_DSA, CKO_PRIVATE_KEY,
+                                pPrivateKeyTemplate, ulPrivateKeyAttributeCount,
+                                &priv);
+            }
+            if (rv == CKR_OK) {
+                ret = WP11_Dilithium_GenerateKeyPair(pub, priv,
                                                  WP11_Session_GetSlot(session));
                 if (ret != 0)
                     rv = CKR_FUNCTION_FAILED;

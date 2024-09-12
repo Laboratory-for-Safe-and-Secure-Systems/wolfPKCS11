@@ -135,6 +135,8 @@ extern "C" {
 #define CKK_GENERIC_SECRET                    0x00000010UL
 #define CKK_AES                               0x0000001FUL
 #define CKK_DES3                              0x00000015UL /* not supported */
+#define CKK_ML_DSA                            0x0000004AUL
+
 
 #define CKA_CLASS                             0x00000000UL
 #define CKA_TOKEN                             0x00000001UL
@@ -207,6 +209,11 @@ extern "C" {
 #define CKA_UNWRAP_TEMPLATE                   0x40000212UL
 #define CKA_DERIVE_TEMPLATE                   0x40000213UL
 #define CKA_ALLOWED_MECHANISMS                0x40000600UL
+#define CKA_VENDOR_DEFINED                    0x80000000UL
+
+/* new post-quantum (general) */
+#define CKA_PARAMETER_SET                     0x0000061dUL
+
 
 #define CKM_RSA_PKCS_KEY_PAIR_GEN             0x00000000UL
 #define CKM_RSA_PKCS                          0x00000001UL
@@ -215,6 +222,7 @@ extern "C" {
 #define CKM_RSA_PKCS_PSS                      0x0000000DUL
 #define CKM_DH_PKCS_KEY_PAIR_GEN              0x00000020UL
 #define CKM_DH_PKCS_DERIVE                    0x00000021UL
+#define CKM_SHA512_256                        0x0000004CUL
 #define CKM_MD5_HMAC                          0x00000211UL
 #define CKM_SHA1                              0x00000220UL
 #define CKM_SHA1_HMAC                         0x00000221UL
@@ -226,6 +234,9 @@ extern "C" {
 #define CKM_SHA384_HMAC                       0x00000261UL
 #define CKM_SHA512                            0x00000270UL
 #define CKM_SHA512_HMAC                       0x00000271UL
+#define CKM_SHA3_256                          0x000002B0UL
+#define CKM_SHA3_384                          0x000002C0UL
+#define CKM_SHA3_512                          0x000002D0UL
 #define CKM_GENERIC_SECRET_KEY_GEN            0x00000350UL
 #define CKM_EC_KEY_PAIR_GEN                   0x00001040UL
 #define CKM_ECDSA                             0x00001041UL
@@ -237,6 +248,20 @@ extern "C" {
 #define CKM_AES_GCM                           0x00001087UL
 #define CKM_AES_CCM                           0x00001088UL
 #define CKM_AES_ECB                           0x000001081L
+#define CKM_ML_DSA_KEY_PAIR_GEN               0x0000001cUL
+#define CKM_ML_DSA                            0x0000001dUL
+#define CKM_HASH_ML_DSA                       0x0000001fUL
+#define CKM_HASH_ML_DSA_SHA224                0x00000023UL
+#define CKM_HASH_ML_DSA_SHA256                0x00000024UL
+#define CKM_HASH_ML_DSA_SHA384                0x00000025UL
+#define CKM_HASH_ML_DSA_SHA512                0x00000026UL
+#define CKM_HASH_ML_DSA_SHA3_224              0x00000027UL
+#define CKM_HASH_ML_DSA_SHA3_256              0x00000028UL
+#define CKM_HASH_ML_DSA_SHA3_384              0x00000029UL
+#define CKM_HASH_ML_DSA_SHA3_512              0x0000002aUL
+#define CKM_HASH_ML_DSA_SHAKE128              0x0000002bUL
+#define CKM_HASH_ML_DSA_SHAKE256              0x0000002cUL
+
 
 #define CKR_OK                                0x00000000UL
 #define CKR_CANCEL                            0x00000001UL
@@ -563,6 +588,33 @@ typedef struct CK_ASYNC_DATA {
     CK_OBJECT_HANDLE  hAdditionalObject;
 } CK_ASYNC_DATA;
 typedef CK_ASYNC_DATA* CK_ASYNC_DATA_PTR;
+
+
+/* generic PQ mechanism parameters */
+typedef CK_ULONG CK_HEDGE_TYPE; /* CK_HEDGE_TYPE currently not in header, but  CK_HEDGE_TYPES !!! */
+#define CKH_HEDGE_PREFERRED        0x00000000UL
+#define CKH_HEDGE_REQUIRED         0x00000001UL
+#define CKH_DETERMINISTIC_REQUIRED 0x00000002UL
+
+typedef struct CK_SIGN_ADDITIONAL_CONTEXT {
+     CK_HEDGE_TYPE   hedgeVariant;
+     CK_BYTE_PTR     pContext;
+     CK_ULONG        ulContextLen;
+} CK_SIGN_ADDITIONAL_CONTEXT;
+
+typedef struct CK_HASH_SIGN_ADDITIONAL_CONTEXT {
+     CK_HEDGE_TYPE     hedgeVariant;
+     CK_BYTE_PTR       pContext;
+     CK_ULONG          ulContextLen;
+     CK_MECHANISM_TYPE hash;
+} CK_HASH_SIGN_ADDITIONAL_CONTEXT;
+
+
+/* ML-DSA values for CKA_PARAMETER_SETS */
+typedef CK_ULONG CK_ML_DSA_PARAMETER_SET_TYPE;
+#define CKP_ML_DSA_44          0x00000001UL
+#define CKP_ML_DSA_65          0x00000002UL
+#define CKP_ML_DSA_87          0x00000003UL
 
 
 /* Function list types. */
@@ -1044,7 +1096,6 @@ struct CK_FUNCTION_LIST {
     CK_RV (*C_CancelFunction)(CK_SESSION_HANDLE hSession);
     CK_RV (*C_WaitForSlotEvent)(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot,
                                 CK_VOID_PTR pReserved);
-
 };
 
 struct CK_FUNCTION_LIST_3_0 {

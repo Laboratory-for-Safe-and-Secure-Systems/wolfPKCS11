@@ -190,6 +190,18 @@ else
     DISABLE_DEFS="$DISABLE_DEFS -DHAVE_ECC"
 fi
 
+AC_ARG_ENABLE([dilithium],
+    [AS_HELP_STRING([--enable-dilithium],[Enable Dilithium (ML-DSA) (default: enabled)])],
+    [ ENABLED_DILITHIUM=$enableval ],
+    [ ENABLED_DILITHIUM=yes ]
+    )
+if test "$ENABLED_DILITHIUM" = "yes"
+then
+    AM_CFLAGS="$AM_CFLAGS -DHAVE_DILITHIUM"
+else
+    DISABLE_DEFS="$DISABLE_DEFS -DHAVE_DILITHIUM"
+fi
+
 AC_ARG_ENABLE([dh],
     [AS_HELP_STRING([--enable-dh],[Enable RSA (default: enabled)])],
     [ ENABLED_DH=$enableval ],
@@ -539,4 +551,4 @@ echo "   * RSA-OAEP:                   $ENABLED_RSAOAEP"
 echo "   * RSA-PSS:                    $ENABLED_RSAPSS"
 echo "   * DH:                         $ENABLED_DH"
 echo "   * ECC:                        $ENABLED_ECC"
-
+echo "   * Dilithium:                  $ENABLED_DILITHIUM"
