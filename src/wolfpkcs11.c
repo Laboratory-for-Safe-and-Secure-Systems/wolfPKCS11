@@ -97,7 +97,11 @@ static CK_FUNCTION_LIST wolfpkcs11FunctionList = {
     C_GenerateRandom,
     C_GetFunctionStatus,
     C_CancelFunction,
-    C_WaitForSlotEvent
+    C_WaitForSlotEvent,
+    C_EncapsulateInit,
+    C_Encapsulate,
+    C_DecapsulateInit,
+    C_Decapsulate
 };
 
 /**

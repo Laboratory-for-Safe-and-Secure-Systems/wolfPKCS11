@@ -107,6 +107,11 @@ extern "C" {
 #define CKF_SO_PIN_TO_BE_CHANGED              0x00800000UL
 #define CKF_ERROR_STATE                       0x01000000UL
 
+/* PQC extension: KEM flags */
+#define CKF_EXTENSION                         0x80000000UL
+#define CKF_ENCAPSULATE             (CKF_EXTENSION | 0x04000000UL)
+#define CKF_DECAPSULATE             (CKF_EXTENSION | 0x08000000UL)
+
 #define CK_UNAVAILABLE_INFORMATION            ((CK_ULONG)-1)
 
 #define CKU_SO                                0UL
@@ -139,6 +144,7 @@ extern "C" {
 
 /* PQC extension: vendor defined keytypes*/
 #define CKK_ML_DSA                  (CKK_VENDOR_DEFINED | 0x0004001UL)
+#define CKK_ML_KEM                  (CKK_VENDOR_DEFINED | 0x0004002UL)
 
 
 #define CKA_CLASS                             0x00000000UL
@@ -215,6 +221,8 @@ extern "C" {
 #define CKA_VENDOR_DEFINED                    0x80000000UL
 
 /* PQC extension: vendor defined attributes */
+#define CKA_ENCAPSULATE             (CKA_VENDOR_DEFINED | 0x00000401UL)
+#define CKA_DECAPSULATE             (CKA_VENDOR_DEFINED | 0x00000402UL)
 #define CKA_PARAMETER_SET           (CKA_VENDOR_DEFINED | 0x00000501UL)
 
 
@@ -254,7 +262,9 @@ extern "C" {
 #define CKM_VENDOR_DEFINED                    0x80000000UL
 
 /* PQC extension: vendor defined mechanisms */
+#define CKM_ML_KEM_KEY_PAIR_GEN     (CKM_VENDOR_DEFINED | 0x0008001UL)
 #define CKM_ML_DSA_KEY_PAIR_GEN     (CKM_VENDOR_DEFINED | 0x0008002UL)
+#define CKM_ML_KEM                  (CKM_VENDOR_DEFINED | 0x0008003UL)
 #define CKM_ML_DSA                  (CKM_VENDOR_DEFINED | 0x0008004UL)
 #define CKM_SHAKE128                (CKM_VENDOR_DEFINED | 0x0008005UL)
 #define CKM_SHAKE256                (CKM_VENDOR_DEFINED | 0x0008006UL)
@@ -264,6 +274,10 @@ extern "C" {
 #define CKP_ML_DSA_44                         0x00000001UL
 #define CKP_ML_DSA_65                         0x00000002UL
 #define CKP_ML_DSA_87                         0x00000003UL
+
+#define CKP_ML_KEM_512                        0x00000021UL
+#define CKP_ML_KEM_768                        0x00000022UL
+#define CKP_ML_KEM_1024                       0x00000023UL
 
 
 #define CKR_OK                                0x00000000UL
@@ -768,6 +782,22 @@ CK_RV C_GetFunctionStatus(CK_SESSION_HANDLE hSession);
 CK_RV C_CancelFunction(CK_SESSION_HANDLE hSession);
 CK_RV C_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot,
                          CK_VOID_PTR pReserved);
+CK_RV C_EncapsulateInit(CK_SESSION_HANDLE hSession,
+                        CK_MECHANISM_PTR pMechanism,
+                        CK_OBJECT_HANDLE hKey);
+CK_RV C_Encapsulate(CK_SESSION_HANDLE hSession,
+                    CK_BYTE_PTR pCipherText,
+                    CK_ULONG_PTR pulCipherTextLen,
+                    CK_BYTE_PTR pSharedSecret,
+                    CK_ULONG_PTR pulSharedSecretLen);
+CK_RV C_DecapsulateInit(CK_SESSION_HANDLE hSession,
+                        CK_MECHANISM_PTR pMechanism,
+                        CK_OBJECT_HANDLE hKey);
+CK_RV C_Decapsulate(CK_SESSION_HANDLE hSession,
+                    CK_BYTE_PTR pCipherText,
+                    CK_ULONG ulCipherTextLen,
+                    CK_BYTE_PTR pSharedSecret,
+                    CK_ULONG_PTR pulSharedSecretLen);
 
 
 struct CK_FUNCTION_LIST {
@@ -950,11 +980,31 @@ struct CK_FUNCTION_LIST {
     CK_RV (*C_CancelFunction)(CK_SESSION_HANDLE hSession);
     CK_RV (*C_WaitForSlotEvent)(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot,
                                 CK_VOID_PTR pReserved);
+    CK_RV (*C_EncapsulateInit)(CK_SESSION_HANDLE hSession,
+                               CK_MECHANISM_PTR  pMechanism,
+                               CK_OBJECT_HANDLE  hKey);
+    CK_RV (*C_Encapsulate)(CK_SESSION_HANDLE hSession,
+                           CK_BYTE_PTR pCipherText,
+                           CK_ULONG_PTR pulCipherTextLen,
+                           CK_BYTE_PTR pSharedSecret,
+                           CK_ULONG_PTR pulSharedSecretLen);
+    CK_RV (*C_DecapsulateInit)(CK_SESSION_HANDLE hSession,
+                               CK_MECHANISM_PTR pMechanism,
+                               CK_OBJECT_HANDLE hKey);
+    CK_RV (*C_Decapsulate)(CK_SESSION_HANDLE hSession,
+                           CK_BYTE_PTR pCipherText,
+                           CK_ULONG ulCipherTextLen,
+                           CK_BYTE_PTR pSharedSecret,
+                           CK_ULONG_PTR pulSharedSecretLen);
 };
+
 
 /* PQC extension: parameter set types */
 typedef CK_ULONG CK_ML_DSA_PARAMETER_SET_TYPE;
 typedef CK_ML_DSA_PARAMETER_SET_TYPE* CK_ML_DSA_PARAMETER_SET_TYPE_PTR;
+
+typedef CK_ULONG CK_ML_KEM_PARAMETER_SET_TYPE;
+typedef CK_ML_KEM_PARAMETER_SET_TYPE* CK_ML_KEM_PARAMETER_SET_TYPE_PTR;
 
 
 /*
@@ -993,6 +1043,18 @@ typedef struct CK_ML_DSA_PARAMS {
 } CK_ML_DSA_PARAMS;
 
 typedef CK_ML_DSA_PARAMS* CK_ML_DSA_PARAMS_PTR;
+
+
+/*
+ * CK_ML_KEM_PARAMS provides the parameters to the
+ * CKM_ML_KEM mechanisms, where each party contributes one key pair.
+ */
+typedef struct CK_ML_KEM_PARAMS {
+  CK_BYTE_PTR           pPublicKey;
+  CK_ULONG              ulPublicKeyLen;
+} CK_ML_KEM_PARAMS;
+
+typedef CK_ML_KEM_PARAMS* CK_ML_KEM_PARAMS_PTR;
 
 
 #ifdef __cplusplus

@@ -35,6 +35,7 @@
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/dilithium.h>
+#include <wolfssl/wolfcrypt/wc_kyber.h>
 
 #include <wolfpkcs11/internal.h>
 #include <wolfpkcs11/store.h>
@@ -178,6 +179,9 @@ struct WP11_Object {
     #endif
     #ifndef NO_DH
         WP11_DhKey dhKey;              /* DH parameters object                */
+    #endif
+    #ifdef HAVE_KYBER
+        KyberKey kyberKey;             /* Kyber key object                    */
     #endif
         WP11_Data symmKey;             /* Symmetric key object                */
         WP11_Cert cert;                /* Certificate object                  */
@@ -933,6 +937,14 @@ int wolfPKCS11_Store_OpenSz(int type, CK_ULONG id1, CK_ULONG id2, int read,
             break;
         case WOLFPKCS11_STORE_DILITHIUMKEY_PUB:
             XSNPRINTF(name, sizeof(name), "%s/wp11_mldsakey_pub_%016lx_%016lx",
+                      str, id1, id2);
+            break;
+        case WOLFPKCS11_STORE_KYBERKEY_PRIV:
+            XSNPRINTF(name, sizeof(name), "%s/wp11_kyberkey_priv_%016lx_%016lx",
+                      str, id1, id2);
+            break;
+        case WOLFPKCS11_STORE_KYBERKEY_PUB:
+            XSNPRINTF(name, sizeof(name), "%s/wp11_kyberkey_pub_%016lx_%016lx",
                       str, id1, id2);
             break;
         default:
@@ -3122,6 +3134,237 @@ static int wp11_Object_Store_DhKey(WP11_Object* object, int tokenId, int objId)
 }
 #endif /* !NO_DH */
 
+#ifdef HAVE_KYBER
+static int KyberKeyTryDecode(KyberKey* key, byte level, byte* data,
+                             word32 len, WP11_Object* object)
+{
+    int ret = 0;
+
+    /* Init key with given type */
+    ret = wc_KyberKey_Init(level, key, NULL, object->slot->devId);
+
+    if (ret == 0) {
+        if (object->objClass == CKO_PRIVATE_KEY) {
+            /* Decode Kyber private key. */
+            ret = wc_KyberKey_DecodePrivateKey(key, data, len);
+        }
+        else {
+            /* Decode Kyber public key. */
+            ret = wc_KyberKey_DecodePublicKey(key, data, len);
+        }
+    }
+
+    return ret;
+}
+
+/**
+ * Decode the Kyber key.
+ *
+ * Encoded private keys are encrypted.
+ *
+ * @param [in, out]  object  Kyber key object.
+ * @return  0 on success.
+ * @return  -ve on failure.
+ */
+static int wp11_Object_Decode_KyberKey(WP11_Object* object)
+{
+    int ret = 0;
+
+    if (object->objClass == CKO_PRIVATE_KEY) {
+        unsigned char* der;
+        int len = object->keyDataLen - AES_BLOCK_SIZE;
+
+        der = (unsigned char*)XMALLOC(len, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (der == NULL) {
+            ret = MEMORY_E;
+        }
+        if (ret == 0) {
+            ret = wp11_DecryptData(der, object->keyData, len,
+                                   object->slot->token.key,
+                                   sizeof(object->slot->token.key), object->iv,
+                                   sizeof(object->iv));
+        }
+        if (ret == 0) {
+            /* Decode Kyber private key. */
+            ret = KyberKeyTryDecode(&object->data.kyberKey, KYBER512,
+                                    der, len, object);
+            if (ret != 0) {
+                ret = KyberKeyTryDecode(&object->data.kyberKey, KYBER768,
+                                        der, len, object);
+            }
+            if (ret != 0) {
+                ret = KyberKeyTryDecode(&object->data.kyberKey, KYBER1024,
+                                        der, len, object);
+            }
+            XMEMSET(der, 0, len);
+        }
+        if (der != NULL)
+            XFREE(der, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    }
+    else {
+        /* Decode Dilithium public key. */
+        ret = KyberKeyTryDecode(&object->data.kyberKey, KYBER512,
+                                object->keyData, object->keyDataLen,
+                                object);
+        if (ret != 0) {
+            ret = KyberKeyTryDecode(&object->data.kyberKey, KYBER768,
+                                    object->keyData, object->keyDataLen,
+                                    object);
+        }
+        if (ret != 0) {
+            ret = KyberKeyTryDecode(&object->data.kyberKey, KYBER1024,
+                                    object->keyData, object->keyDataLen,
+                                    object);
+        }
+    }
+    object->encoded = (ret != 0);
+
+    return ret;
+}
+
+/**
+ * Encode the Kyber (ML-KEM) key.
+ *
+ * Private keys are encoded and then encrypted.
+ *
+ * @param [in, out]  object  Kyber key object.
+ * @return  0 on success.
+ * @return  -ve on failure.
+ */
+static int wp11_Object_Encode_KyberKey(WP11_Object* object)
+{
+    int ret;
+    word32 keyLen = 0;
+
+    if (object->objClass == CKO_PRIVATE_KEY) {
+        /* Get length of encoded private key. */
+        ret = wc_KyberKey_PrivateKeySize(&object->data.kyberKey, &keyLen);
+        if (ret == 0) {
+            object->keyDataLen = keyLen + AES_BLOCK_SIZE;
+        }
+    }
+    else {
+        /* Get length of encoded public key. */
+        ret = wc_KyberKey_PublicKeySize(&object->data.kyberKey, &keyLen);
+        if (ret == 0) {
+            object->keyDataLen = keyLen;
+        }
+    }
+
+    if (ret == 0) {
+        XFREE(object->keyData, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        /* Allocate buffer to hold encoded key. */
+        object->keyData = (unsigned char*)XMALLOC(object->keyDataLen, NULL,
+                                                       DYNAMIC_TYPE_TMP_BUFFER);
+        if (object->keyData == NULL)
+            ret = MEMORY_E;
+    }
+
+    if (ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
+        /* Encode private key. */
+        ret = wc_KyberKey_EncodePrivateKey(&object->data.kyberKey,
+                                           object->keyData, object->keyDataLen);
+        if (ret == 0) {
+            ret = wp11_EncryptData(object->keyData, object->keyData, ret,
+                                    object->slot->token.key,
+                                    sizeof(object->slot->token.key), object->iv,
+                                    sizeof(object->iv));
+        }
+    }
+    else if (ret == 0 && object->objClass == CKO_PUBLIC_KEY) {
+        /* Encode public key. */
+        ret = wc_KyberKey_EncodePublicKey(&object->data.kyberKey,
+                                          object->keyData, object->keyDataLen);
+    }
+
+    if (ret != 0) {
+        XFREE(object->keyData, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        object->keyData = NULL;
+        object->keyDataLen = 0;
+    }
+
+    return ret;
+}
+
+/**
+ * Load a Kyber (ML-KEM) key from storage.
+ *
+ * @param [in, out]  object   Kyber key object.
+ * @param [in]       tokenId  Id of token this key belongs to.
+ * @param [in]       objId    Id of object for token.
+ * @return  0 on success.
+ * @return  MEMORY_E when dynamic memory allocation fails.
+ * @return  BUFFER_E when loading fails.
+ * @return  NOT_AVAILABLE_E when unable to locate data.
+ */
+static int wp11_Object_Load_KyberKey(WP11_Object* object, int tokenId,
+                                         int objId)
+{
+    int ret;
+    void* storage = NULL;
+    int storeType;
+
+    /* Determine store type - private keys may be encrypted. */
+    if (object->objClass == CKO_PRIVATE_KEY)
+        storeType = WOLFPKCS11_STORE_KYBERKEY_PRIV;
+    else
+        storeType = WOLFPKCS11_STORE_KYBERKEY_PUB;
+
+    /* Open access to Kyber key. */
+    ret = wp11_storage_open(storeType, tokenId, objId, 1, &storage);
+    if (ret == 0) {
+        /* Read DER encoded Kyber key. */
+        ret = wp11_storage_read_alloc_array(storage, &object->keyData,
+                                                           &object->keyDataLen);
+        wp11_storage_close(storage);
+    }
+
+    return ret;
+}
+
+/**
+ * Store a Kyber key to storage.
+ *
+ * @param [in]  object   Kyber key object.
+ * @param [in]  tokenId  Id of token this key belongs to.
+ * @param [in]  objId    Id of object for token.
+ * @return  0 on success.
+ * @return  MEMORY_E when dynamic memory allocation fails.
+ * @return  BUFFER_E when storing fails.
+ * @return  NOT_AVAILABLE_E when unable to write data.
+ */
+static int wp11_Object_Store_KyberKey(WP11_Object* object, int tokenId,
+                                          int objId)
+{
+    int ret;
+    void* storage = NULL;
+    int storeType;
+
+    /* Determine store type - private keys may be encrypted. */
+    if (object->objClass == CKO_PRIVATE_KEY)
+        storeType = WOLFPKCS11_STORE_KYBERKEY_PRIV;
+    else
+        storeType = WOLFPKCS11_STORE_KYBERKEY_PUB;
+
+    /* Open access to Kyber key. */
+    ret = wp11_storage_open(storeType, tokenId, objId, 0, &storage);
+    if (ret == 0) {
+        if (object->keyData == NULL) {
+            ret = wp11_Object_Encode_KyberKey(object);
+        }
+        if (ret == 0) {
+            /* Write encoded Kyber key to storage. */
+            ret = wp11_storage_write_array(storage, object->keyData,
+                                                            object->keyDataLen);
+        }
+
+        wp11_storage_close(storage);
+    }
+
+    return ret;
+}
+#endif /* HAVE_KYBER */
+
 /**
  * Decode the symmetric key - requires decryption.
  *
@@ -3455,6 +3698,11 @@ static int wp11_Object_Store_Object(WP11_Object* object, int tokenId, int objId)
                 ret = wp11_Object_Load_DhKey(object, tokenId, objId);
                 break;
         #endif
+        #ifdef HAVE_KYBER
+            case CKK_ML_KEM:
+                ret = wp11_Object_Load_KyberKey(object, tokenId, objId);
+                break;
+        #endif
         #ifndef NO_AES
             case CKK_AES:
         #endif
@@ -3522,6 +3770,11 @@ static int wp11_Object_Store(WP11_Object* object, int tokenId, int objId)
                     ret = wp11_Object_Store_DhKey(object, tokenId, objId);
                     break;
             #endif
+            #ifdef HAVE_KYBER
+                case CKK_ML_KEM:
+                    ret = wp11_Object_Store_KyberKey(object, tokenId, objId);
+                    break;
+            #endif
             #ifndef NO_AES
                 case CKK_AES:
             #endif
@@ -3575,6 +3828,11 @@ static int wp11_Object_Decode(WP11_Object* object)
         #ifndef NO_DH
             case CKK_DH:
                 ret = wp11_Object_Decode_DhKey(object);
+                break;
+        #endif
+        #ifdef HAVE_KYBER
+            case CKK_ML_KEM:
+                ret = wp11_Object_Decode_KyberKey(object);
                 break;
         #endif
         #ifndef NO_AES
@@ -3644,6 +3902,15 @@ static int wp11_Object_Encode(WP11_Object* object, int protect)
                 ret = wp11_Object_Encode_DhKey(object);
                 if (protect && ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
                     XMEMSET(object->data.dhKey.key, 0, object->data.dhKey.len);
+                    object->encoded = 1;
+                }
+                break;
+        #endif
+        #ifdef HAVE_KYBER
+            case CKK_ML_KEM:
+                ret = wp11_Object_Encode_KyberKey(object);
+                if (protect && ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
+                    wc_KyberKey_Free(&object->data.kyberKey);
                     object->encoded = 1;
                 }
                 break;
@@ -3721,6 +3988,14 @@ static void wp11_Object_Unstore(WP11_Object* object, int tokenId, int objId)
                 storeObjType = WOLFPKCS11_STORE_DHKEY_PRIV;
             else
                 storeObjType = WOLFPKCS11_STORE_DHKEY_PUB;
+            break;
+    #endif
+    #ifdef HAVE_KYBER
+        case CKK_ML_KEM:
+            if (object->objClass == CKO_PRIVATE_KEY)
+                storeObjType = WOLFPKCS11_STORE_KYBERKEY_PRIV;
+            else
+                storeObjType = WOLFPKCS11_STORE_KYBERKEY_PUB;
             break;
     #endif
     #ifndef NO_AES
@@ -6337,6 +6612,71 @@ int WP11_Object_SetDhKey(WP11_Object* object, unsigned char** data,
 }
 #endif
 
+#ifdef HAVE_KYBER
+/**
+ * Set the Kyber (ML-KEM) key data into the object.
+ * Store the data in the wolfCrypt data structure.
+ *
+ * @param  object  [in]  Object object.
+ * @param  data    [in]  Array of byte arrays.
+ * @param  len     [in]  Array of lengths of byte arrays.
+ * @return  -ve on failure.
+ *          0 on success.
+ */
+int WP11_Object_SetKyberKey(WP11_Object* object, unsigned char** data,
+                            CK_ULONG* len)
+{
+    int ret;
+    KyberKey* key;
+    CK_ML_KEM_PARAMETER_SET_TYPE* params;
+
+    if (data[0] == NULL)
+        return BAD_FUNC_ARG;
+
+    if (len[0] != sizeof(CK_ML_KEM_PARAMETER_SET_TYPE))
+        return BUFFER_E;
+
+    if (object->onToken)
+        WP11_Lock_LockRW(object->lock);
+
+    key = &object->data.kyberKey;
+    params = (CK_ML_KEM_PARAMETER_SET_TYPE*) data[0];
+
+    /* Init Kyber key with type based on the parameter */
+    switch (*params) {
+        case CKP_ML_KEM_512:
+            ret = wc_KyberKey_Init(KYBER512, key, NULL, object->slot->devId);
+            break;
+        case CKP_ML_KEM_768:
+            ret = wc_KyberKey_Init(KYBER768, key, NULL, object->slot->devId);
+            break;
+        case CKP_ML_KEM_1024:
+            ret = wc_KyberKey_Init(KYBER1024, key, NULL, object->slot->devId);
+            break;
+        default:
+            ret = ASN_PARSE_E;
+    }
+
+    /* Set key data */
+    if (ret == 0 && data[1] != NULL) {
+        if (object->objClass == CKO_PUBLIC_KEY) {
+            ret = wc_KyberKey_DecodePublicKey(key, data[1], len[1]);
+        }
+        else {
+            ret = wc_KyberKey_DecodePrivateKey(key, data[1], len[1]);
+        }
+    }
+
+    if (ret != 0)
+        wc_KyberKey_Free(key);
+
+    if (object->onToken)
+        WP11_Lock_UnlockRW(object->lock);
+
+    return ret;
+}
+#endif /* HAVE_KYBER */
+
 /**
  * Set the DH key data into the object.
  *
@@ -7544,6 +7884,9 @@ int WP11_Object_SetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
 #ifndef NO_DH
                 case CKK_DH:
 #endif
+#ifdef HAVE_KYBER
+                case CKK_ML_KEM:
+#endif
 #ifndef NO_AES
                 case CKK_AES:
 #endif
@@ -7581,10 +7924,25 @@ int WP11_Object_SetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
             }
             break;
         case CKA_PARAMETER_SET:
+            switch (object->type) {
 #ifdef HAVE_DILITHIUM
-            if (object->type != CKK_ML_DSA)
+            case CKK_ML_DSA:
+                break;
 #endif
+#ifdef HAVE_KYBER
+            case CKK_ML_KEM:
+                break;
+#endif
+            default:
                 ret = BAD_FUNC_ARG;
+                break;
+            }
+            break;
+        case CKA_ENCAPSULATE:
+            WP11_Object_SetOpFlag(object, CKF_ENCAPSULATE, *(CK_BBOOL*)data);
+            break;
+        case CKA_DECAPSULATE:
+            WP11_Object_SetOpFlag(object, CKF_DECAPSULATE, *(CK_BBOOL*)data);
             break;
         default:
             ret = BAD_FUNC_ARG;

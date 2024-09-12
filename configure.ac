@@ -214,6 +214,18 @@ else
     DISABLE_DEFS="$DISABLE_DEFS -DNO_DH"
 fi
 
+AC_ARG_ENABLE([kyber],
+    [AS_HELP_STRING([--enable-kyber],[Enable Kyber (ML-KEM) (default: enabled)])],
+    [ ENABLED_KYBER=$enableval ],
+    [ ENABLED_KYBER=yes ]
+    )
+if test "$ENABLED_KYBER" = "yes"
+then
+    AM_CFLAGS="$AM_CFLAGS -DHAVE_KYBER"
+else
+    DISABLE_DEFS="$DISABLE_DEFS -DHAVE_KYBER"
+fi
+
 AC_ARG_ENABLE([aes],
     [AS_HELP_STRING([--enable-aes],[Enable AES (default: enabled)])],
     [ ENABLED_AES=$enableval ],
@@ -552,4 +564,4 @@ echo "   * RSA-PSS:                    $ENABLED_RSAPSS"
 echo "   * DH:                         $ENABLED_DH"
 echo "   * ECC:                        $ENABLED_ECC"
 echo "   * Dilithium:                  $ENABLED_DILITHIUM"
-
+echo "   * Kyber:                      $ENABLED_KYBER"
