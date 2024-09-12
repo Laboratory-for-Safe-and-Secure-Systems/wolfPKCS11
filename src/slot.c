@@ -234,6 +234,10 @@ static CK_MECHANISM_TYPE mechanismList[] = {
     CKM_ECDSA,
     CKM_ECDH1_DERIVE,
 #endif
+#ifdef HAVE_DILITHIUM
+    CKM_ML_DSA_KEY_PAIR_GEN,
+    CKM_ML_DSA,
+#endif
 #ifndef NO_DH
     CKM_DH_PKCS_KEY_PAIR_GEN,
     CKM_DH_PKCS_DERIVE,
@@ -362,6 +366,16 @@ static CK_MECHANISM_INFO ecdsaMechInfo = {
 /* Info on ECDH mechanism. */
 static CK_MECHANISM_INFO ecdhMechInfo = {
     256, 521, CKF_DERIVE
+};
+#endif
+#ifdef HAVE_DILITHIUM
+/* Info on Dilitihum (ML-DSA) key generation mechanism. */
+static CK_MECHANISM_INFO dilitihumKgMechInfo = {
+    1312, 2592, CKF_GENERATE_KEY_PAIR
+};
+/* Info on Dilitihum (ML-DSA) mechanism. */
+static CK_MECHANISM_INFO dilitihumMechInfo = {
+    1312, 2592, CKF_SIGN | CKF_VERIFY
 };
 #endif
 #ifndef NO_DH
@@ -494,6 +508,14 @@ CK_RV C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type,
             break;
         case CKM_ECDH1_DERIVE:
             XMEMCPY(pInfo, &ecdhMechInfo, sizeof(CK_MECHANISM_INFO));
+            break;
+#endif
+#ifdef HAVE_DILITHIUM
+        case CKM_ML_DSA_KEY_PAIR_GEN:
+            XMEMCPY(pInfo, &dilitihumKgMechInfo, sizeof(CK_MECHANISM_INFO));
+            break;
+        case CKM_ML_DSA:
+            XMEMCPY(pInfo, &dilitihumMechInfo, sizeof(CK_MECHANISM_INFO));
             break;
 #endif
 #ifndef NO_DH

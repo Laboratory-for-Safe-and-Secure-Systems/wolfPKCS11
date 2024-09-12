@@ -217,6 +217,17 @@ if(WOLFPKCS11_ECC)
     list(APPEND WOLFPKCS11_DEFINITIONS "-DHAVE_ECC")
 endif()
 
+
+# ML-DSA (Dilithium)
+add_option("WOLFPKCS11_DILITHIUM"
+    "Enable Dilithium (default: enabled)"
+    "yes" "yes;no")
+
+if(WOLFPKCS11_DILITHIUM)
+    list(APPEND WOLFPKCS11_DEFINITIONS "-DHAVE_DILITHIUM")
+endif()
+
+
 # DH
 add_option("WOLFPKCS11_DH"
     "Enable DH (default: enabled)"
