@@ -96,6 +96,16 @@ static CK_ATTRIBUTE_TYPE dhKeyParams[] = {
 #define DH_KEY_PARAMS_CNT     (sizeof(dhKeyParams)/sizeof(*dhKeyParams))
 #endif
 
+#ifdef HAVE_KYBER
+/* Kyber (ML-KEM) key data attributes. */
+static CK_ATTRIBUTE_TYPE kyberKeyParams[] = {
+    CKA_PARAMETER_SET,
+    CKA_VALUE
+};
+/* Count of Kyber key data attributes. */
+#define KYBER_KEY_PARAMS_CNT (sizeof(kyberKeyParams)/sizeof(*kyberKeyParams))
+#endif
+
 /* Secret key data attributes. */
 static CK_ATTRIBUTE_TYPE secretKeyParams[] = {
     CKA_VALUE_LEN,
@@ -197,6 +207,8 @@ static AttributeType attrType[] = {
     { CKA_HASH_OF_SUBJECT_PUBLIC_KEY,  ATTR_TYPE_DATA  },
     { CKA_HASH_OF_ISSUER_PUBLIC_KEY,   ATTR_TYPE_DATA  },
     { CKA_NAME_HASH_ALGORITHM,         ATTR_TYPE_ULONG },
+    { CKA_ENCAPSULATE,                 ATTR_TYPE_BOOL  },
+    { CKA_DECAPSULATE,                 ATTR_TYPE_BOOL  },
     { CKA_PARAMETER_SET,               ATTR_TYPE_DATA  },
 };
 /* Count of elements in attribute type list. */
@@ -376,6 +388,12 @@ static CK_RV SetAttributeValue(WP11_Session* session, WP11_Object* obj,
                 cnt = DH_KEY_PARAMS_CNT;
                 break;
         #endif
+        #ifdef HAVE_KYBER
+            case CKK_ML_KEM:
+                attrs = kyberKeyParams;
+                cnt = KYBER_KEY_PARAMS_CNT;
+                break;
+        #endif
         #ifndef NO_AES
             case CKK_AES:
         #endif
@@ -427,6 +445,11 @@ static CK_RV SetAttributeValue(WP11_Session* session, WP11_Object* obj,
     #ifndef NO_DH
             case CKK_DH:
                 ret = WP11_Object_SetDhKey(obj, data, len);
+                break;
+    #endif
+    #ifdef HAVE_KYBER
+            case CKK_ML_KEM:
+                ret = WP11_Object_SetKyberKey(obj, data, len);
                 break;
     #endif
     #ifndef NO_AES
@@ -723,7 +746,7 @@ static CK_RV CreateObject(WP11_Session* session, CK_ATTRIBUTE_PTR pTemplate,
 
         if (objType != CKK_RSA && objType != CKK_EC && objType != CKK_DH &&
             objType != CKK_AES && objType != CKK_GENERIC_SECRET &&
-            objType != CKK_ML_DSA) {
+            objType != CKK_ML_DSA && objType != CKK_ML_KEM) {
             return CKR_ATTRIBUTE_VALUE_INVALID;
         }
     }
@@ -4938,42 +4961,93 @@ CK_RV C_MessageVerifyFinal(CK_SESSION_HANDLE hSession)
     return CKR_FUNCTION_NOT_SUPPORTED;
 }
 
+/**
+ * Encapsulate a KEM shared secret and generate the related ciphertext.
+ *
+ * @param  hSession         [in]     Handle of session.
+ * @param  pMechanism       [in]     Type of operation to perform with parameters.
+ * @param  hPublicKey       [in]     Handle to KEM public key object.
+ * @param  pTemplate        [in]     Array of attributes to create shared secretkey
+ *                                   object with.
+ * @param  ulAttributeCount [in]     Count of array elements.
+ * @param  phKey            [out]    Handle to the generated shared secret key.
+ * @param  pCipherText      [in]     Buffer to hold the ciphertext.
+ * @param  pulCipherTextLen [in,out] On in, length of buffer in bytes.
+ *                                   On out, length of ciphertext in bytes.
+ * @return  CKR_CRYPTOKI_NOT_INITIALIZED when library not initialized.
+ *          CKR_SESSION_HANDLE_INVALID when session handle is not valid.
+ *          CKR_ARGUMENTS_BAD when a pointer argument is NULL.
+ *          CKR_BUFFER_TOO_SMALL when the output length is too small for
+ *          ciphertext or shared secret data.
+ *          CKR_FUNCTION_FAILED when encapsulation fails.
+ *          CKR_MECHANISM_INVALID when wrong initialization function was used.
+ *          CKR_OK on success.
+ */
 CK_RV C_EncapsulateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism,
                        CK_OBJECT_HANDLE hPublicKey, CK_ATTRIBUTE_PTR pTemplate,
                        CK_ULONG ulAttributeCount, CK_OBJECT_HANDLE_PTR phKey,
                        CK_BYTE_PTR pCiphertext, CK_ULONG_PTR pulCiphertextLen)
 {
+    int ret;
+    WP11_Session* session;
+    WP11_Object* obj = NULL;
+
     if (!WP11_Library_IsInitialized())
         return CKR_CRYPTOKI_NOT_INITIALIZED;
+    if (WP11_Session_Get(hSession, &session) != 0)
+        return CKR_SESSION_HANDLE_INVALID;
+    if (pCiphertext == NULL || pulCiphertextLen == NULL ||
+        pMechanism == NULL || pTemplate == NULL || phKey == NULL)
+        return CKR_ARGUMENTS_BAD;
 
-    (void)hSession;
-    (void)pMechanism;
-    (void)hPublicKey;
-    (void)pTemplate;
-    (void)ulAttributeCount;
-    (void)phKey;
-    (void)pCiphertext;
-    (void)pulCiphertextLen;
+    ret = WP11_Object_Find(session, hPublicKey, &obj);
+    if (ret != 0)
+        return CKR_OBJECT_HANDLE_INVALID;
 
     return CKR_FUNCTION_NOT_SUPPORTED;
 }
 
+/**
+ * Decapsulate the KEM ciphertext to obtain the shared secret.
+ *
+ * @param  hSession         [in]   Handle of session.
+ * @param  pMechanism       [in]   Type of operation to perform with parameters.
+ * @param  hPrivateKey      [in]   Handle to KEM private key object.
+ * @param  pCiphertext      [in]   Buffer holding the ciphertext.
+ * @param  ulCiphertextLen  [in]   Length of ciphertext in bytes.
+ * @param  pTemplate        [in]   Array of attributes to create shared secretkey
+ *                                 object with.
+ * @param  ulAttributeCount [in]   Count of array elements.
+ * @param  phKey            [out]  Handle to the generated shared secret key.
+ * @return  CKR_CRYPTOKI_NOT_INITIALIZED when library not initialized.
+ *          CKR_SESSION_HANDLE_INVALID when session handle is not valid.
+ *          CKR_ARGUMENTS_BAD when a pointer argument is NULL.
+ *          CKR_BUFFER_TOO_SMALL when the output length is too small for
+ *          shared secret data.
+ *          CKR_FUNCTION_FAILED when encapsulation fails.
+ *          CKR_MECHANISM_INVALID when wrong initialization function was used.
+ *          CKR_OK on success.
+ */
 CK_RV C_DecapsulateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism,
                        CK_OBJECT_HANDLE hPrivateKey, CK_BYTE_PTR pCiphertext,
                        CK_ULONG ulCiphertextLen, CK_ATTRIBUTE_PTR pTemplate,
                        CK_ULONG ulAttributeCount, CK_OBJECT_HANDLE_PTR phKey)
 {
+    int ret;
+    WP11_Session* session;
+    WP11_Object* obj = NULL;
+
     if (!WP11_Library_IsInitialized())
         return CKR_CRYPTOKI_NOT_INITIALIZED;
+    if (WP11_Session_Get(hSession, &session) != 0)
+        return CKR_SESSION_HANDLE_INVALID;
+    if (pCiphertext == NULL || pMechanism == NULL || pTemplate == NULL ||
+        phKey == NULL)
+        return CKR_ARGUMENTS_BAD;
 
-    (void)hSession;
-    (void)pMechanism;
-    (void)hPrivateKey;
-    (void)pCiphertext;
-    (void)ulCiphertextLen;
-    (void)pTemplate;
-    (void)ulAttributeCount;
-    (void)phKey;
+    ret = WP11_Object_Find(session, hPrivateKey, &obj);
+    if (ret != 0)
+        return CKR_OBJECT_HANDLE_INVALID;
 
     return CKR_FUNCTION_NOT_SUPPORTED;
 }
