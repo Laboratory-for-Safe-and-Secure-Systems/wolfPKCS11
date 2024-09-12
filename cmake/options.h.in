@@ -50,6 +50,8 @@ extern "C" {
 #cmakedefine WOLFSSL_KEY_GEN
 #undef HAVE_ECC
 #cmakedefine HAVE_ECC
+#undef HAVE_DILITHIUM
+#cmakedefine HAVE_DILITHIUM
 #undef NO_DH
 #cmakedefine NO_DH
 #undef NO_AES
