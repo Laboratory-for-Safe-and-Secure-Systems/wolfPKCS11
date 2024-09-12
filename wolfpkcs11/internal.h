@@ -280,6 +280,8 @@ int WP11_Object_SetDilithiumKey(WP11_Object* object, unsigned char** data,
                                 CK_ULONG* len);
 int WP11_Object_SetDhKey(WP11_Object* object, unsigned char** data,
                          CK_ULONG* len);
+int WP11_Object_SetMlKemKey(WP11_Object* object, unsigned char** data,
+                            CK_ULONG* len);
 int WP11_Object_SetSecretKey(WP11_Object* object, unsigned char** data,
                              CK_ULONG* len);
 int WP11_Object_SetCert(WP11_Object* object, unsigned char** data,
@@ -367,6 +369,15 @@ int WP11_Dh_GenerateKeyPair(WP11_Object* pub, WP11_Object* priv,
                             WP11_Slot* slot);
 int WP11_Dh_Derive(unsigned char* pub, word32 pubLen, unsigned char* key,
                    word32* keyLen, WP11_Object* priv);
+
+int WP11_MlKem_GenerateKeyPair(WP11_Object* pub, WP11_Object* priv,
+                               WP11_Slot* slot);
+int WP11_MlKem_Encapsulate(WP11_Object* pub, unsigned char** sharedSecet,
+                           word32* ssLen, CK_BYTE_PTR pCiphertext,
+                           CK_ULONG_PTR pulCiphertextLen);
+int WP11_MlKem_Decapsulate(WP11_Object* priv, unsigned char** sharedSecet,
+                           word32* ssLen, CK_BYTE_PTR pCiphertext,
+                           CK_ULONG ulCiphertextLen);
 
 int WP11_AesGenerateKey(WP11_Object* secret, WP11_Slot* slot);
 

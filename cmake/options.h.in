@@ -54,6 +54,8 @@ extern "C" {
 #cmakedefine HAVE_DILITHIUM
 #undef NO_DH
 #cmakedefine NO_DH
+#undef HAVE_MLKEM
+#cmakedefine HAVE_MLKEM
 #undef NO_AES
 #cmakedefine NO_AES
 #undef NO_AES_CBC

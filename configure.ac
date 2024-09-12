@@ -214,6 +214,18 @@ else
     DISABLE_DEFS="$DISABLE_DEFS -DNO_DH"
 fi
 
+AC_ARG_ENABLE([mlkem],
+    [AS_HELP_STRING([--enable-mlkem],[Enable ML-KEM (default: enabled)])],
+    [ ENABLED_MLKEM=$enableval ],
+    [ ENABLED_MLKEM=yes ]
+    )
+if test "$ENABLED_MLKEM" = "yes"
+then
+    AM_CFLAGS="$AM_CFLAGS -DHAVE_MLKEM"
+else
+    DISABLE_DEFS="$DISABLE_DEFS -DHAVE_MLKEM"
+fi
+
 AC_ARG_ENABLE([aes],
     [AS_HELP_STRING([--enable-aes],[Enable AES (default: enabled)])],
     [ ENABLED_AES=$enableval ],
@@ -552,3 +564,4 @@ echo "   * RSA-PSS:                    $ENABLED_RSAPSS"
 echo "   * DH:                         $ENABLED_DH"
 echo "   * ECC:                        $ENABLED_ECC"
 echo "   * Dilithium:                  $ENABLED_DILITHIUM"
+echo "   * ML-KEM:                     $ENABLED_MLKEM"

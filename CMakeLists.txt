@@ -238,6 +238,16 @@ if(NOT WOLFPKCS11_DH)
 endif()
 
 
+# ML-KEM
+add_option("WOLFPKCS11_MLKEM"
+    "Enable ML-KEM (default: enabled)"
+    "yes" "yes;no")
+
+if(WOLFPKCS11_MLKEM)
+    list(APPEND WOLFPKCS11_DEFINITIONS "-DHAVE_MLKEM")
+endif()
+
+
 # AES
 add_option("WOLFPKCS11_AES"
     "Enable AES (default: enabled)"

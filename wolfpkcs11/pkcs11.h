@@ -84,6 +84,9 @@ extern "C" {
 #define CKF_EC_UNCOMPRESS                     0x01000000UL
 #define CKF_EC_COMPRESS                       0x02000000UL
 
+#define CKF_ENCAPSULATE                       0x10000000UL
+#define CKF_DECAPSULATE                       0x20000000UL
+
 #define CKF_LIBRARY_CANT_CREATE_OS_THREADS    0x00000001UL
 #define CKF_OS_LOCKING_OK                     0x00000002UL
 
@@ -135,6 +138,7 @@ extern "C" {
 #define CKK_GENERIC_SECRET                    0x00000010UL
 #define CKK_AES                               0x0000001FUL
 #define CKK_DES3                              0x00000015UL /* not supported */
+#define CKK_ML_KEM                            0x00000049UL
 #define CKK_ML_DSA                            0x0000004AUL
 
 
@@ -213,6 +217,9 @@ extern "C" {
 
 /* new post-quantum (general) */
 #define CKA_PARAMETER_SET                     0x0000061dUL
+/* KEM */
+#define CKA_ENCAPSULATE                       0x00000633UL
+#define CKA_DECAPSULATE                       0x00000634UL
 
 
 #define CKM_RSA_PKCS_KEY_PAIR_GEN             0x00000000UL
@@ -248,6 +255,8 @@ extern "C" {
 #define CKM_AES_GCM                           0x00001087UL
 #define CKM_AES_CCM                           0x00001088UL
 #define CKM_AES_ECB                           0x000001081L
+#define CKM_ML_KEM_KEY_PAIR_GEN               0x0000000fUL
+#define CKM_ML_KEM                            0x00000017UL
 #define CKM_ML_DSA_KEY_PAIR_GEN               0x0000001cUL
 #define CKM_ML_DSA                            0x0000001dUL
 #define CKM_HASH_ML_DSA                       0x0000001fUL
@@ -615,6 +624,13 @@ typedef CK_ULONG CK_ML_DSA_PARAMETER_SET_TYPE;
 #define CKP_ML_DSA_44          0x00000001UL
 #define CKP_ML_DSA_65          0x00000002UL
 #define CKP_ML_DSA_87          0x00000003UL
+
+
+/* ML-KEM values for CKA_PARAMETER_SETS */
+typedef CK_ULONG CK_ML_KEM_PARAMETER_SET_TYPE;
+#define CKP_ML_KEM_512         0x00000001UL
+#define CKP_ML_KEM_768         0x00000002UL
+#define CKP_ML_KEM_1024        0x00000003UL
 
 
 /* Function list types. */

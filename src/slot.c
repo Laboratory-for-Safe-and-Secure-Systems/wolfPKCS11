@@ -242,6 +242,10 @@ static CK_MECHANISM_TYPE mechanismList[] = {
     CKM_DH_PKCS_KEY_PAIR_GEN,
     CKM_DH_PKCS_DERIVE,
 #endif
+#ifdef HAVE_MLKEM
+    CKM_ML_KEM_KEY_PAIR_GEN,
+    CKM_ML_KEM,
+#endif
 #ifndef NO_AES
 #ifdef HAVE_AES_CBC
     CKM_AES_CBC,
@@ -388,6 +392,16 @@ static CK_MECHANISM_INFO dhPkcsMechInfo = {
     1024, 4096, CKF_DERIVE
 };
 #endif
+#ifdef HAVE_MLKEM
+/* Info on ML-KEM key generation mechanism. */
+static CK_MECHANISM_INFO mlKemKgMechInfo = {
+    800, 1568, CKF_GENERATE_KEY_PAIR
+};
+/* Info on ML-KEM mechanism. */
+static CK_MECHANISM_INFO mlKemMechInfo = {
+    800, 1568, CKF_ENCAPSULATE | CKF_DECAPSULATE
+};
+#endif
 #ifndef NO_AES
 #ifdef HAVE_AES_CBC
 /* Info on AES-CBC mechanism. */
@@ -524,6 +538,14 @@ CK_RV C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type,
             break;
         case CKM_DH_PKCS_DERIVE:
             XMEMCPY(pInfo, &dhPkcsMechInfo, sizeof(CK_MECHANISM_INFO));
+            break;
+#endif
+#ifdef HAVE_MLKEM
+        case CKM_ML_KEM_KEY_PAIR_GEN:
+            XMEMCPY(pInfo, &mlKemKgMechInfo, sizeof(CK_MECHANISM_INFO));
+            break;
+        case CKM_ML_KEM:
+            XMEMCPY(pInfo, &mlKemMechInfo, sizeof(CK_MECHANISM_INFO));
             break;
 #endif
 #ifndef NO_AES

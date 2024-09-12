@@ -35,6 +35,7 @@
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/dilithium.h>
+#include <wolfssl/wolfcrypt/wc_mlkem.h>
 
 #include <wolfpkcs11/internal.h>
 #include <wolfpkcs11/store.h>
@@ -178,6 +179,9 @@ struct WP11_Object {
     #endif
     #ifndef NO_DH
         WP11_DhKey dhKey;              /* DH parameters object                */
+    #endif
+    #ifdef HAVE_MLKEM
+        MlKemKey mlKemKey;             /* ML-KEM key object                    */
     #endif
         WP11_Data symmKey;             /* Symmetric key object                */
         WP11_Cert cert;                /* Certificate object                  */
@@ -933,6 +937,14 @@ int wolfPKCS11_Store_OpenSz(int type, CK_ULONG id1, CK_ULONG id2, int read,
             break;
         case WOLFPKCS11_STORE_DILITHIUMKEY_PUB:
             XSNPRINTF(name, sizeof(name), "%s/wp11_mldsakey_pub_%016lx_%016lx",
+                      str, id1, id2);
+            break;
+        case WOLFPKCS11_STORE_MLKEMKEY_PRIV:
+            XSNPRINTF(name, sizeof(name), "%s/wp11_mlkemkey_priv_%016lx_%016lx",
+                      str, id1, id2);
+            break;
+        case WOLFPKCS11_STORE_MLKEMKEY_PUB:
+            XSNPRINTF(name, sizeof(name), "%s/wp11_mlkemkey_pub_%016lx_%016lx",
                       str, id1, id2);
             break;
         default:
@@ -3146,6 +3158,237 @@ static int wp11_Object_Store_DhKey(WP11_Object* object, int tokenId, int objId)
 }
 #endif /* !NO_DH */
 
+#ifdef HAVE_MLKEM
+static int MlKemKeyTryDecode(MlKemKey* key, byte level, byte* data,
+                             word32 len, WP11_Object* object)
+{
+    int ret = 0;
+
+    /* Init key with given type */
+    ret = wc_MlKemKey_Init(key, level, NULL, object->slot->devId);
+
+    if (ret == 0) {
+        if (object->objClass == CKO_PRIVATE_KEY) {
+            /* Decode ML-KEM private key. */
+            ret = wc_MlKemKey_DecodePrivateKey(key, data, len);
+        }
+        else {
+            /* Decode ML-KEM public key. */
+            ret = wc_MlKemKey_DecodePublicKey(key, data, len);
+        }
+    }
+
+    return ret;
+}
+
+/**
+ * Decode the ML-KEM key.
+ *
+ * Encoded private keys are encrypted.
+ *
+ * @param [in, out]  object  ML-KEM key object.
+ * @return  0 on success.
+ * @return  -ve on failure.
+ */
+static int wp11_Object_Decode_MlKemKey(WP11_Object* object)
+{
+    int ret = 0;
+
+    if (object->objClass == CKO_PRIVATE_KEY) {
+        unsigned char* der;
+        int len = object->keyDataLen - AES_BLOCK_SIZE;
+
+        der = (unsigned char*)XMALLOC(len, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (der == NULL) {
+            ret = MEMORY_E;
+        }
+        if (ret == 0) {
+            ret = wp11_DecryptData(der, object->keyData, len,
+                                   object->slot->token.key,
+                                   sizeof(object->slot->token.key), object->iv,
+                                   sizeof(object->iv));
+        }
+        if (ret == 0) {
+            /* Decode ML-KEM private key. */
+            ret = MlKemKeyTryDecode(&object->data.mlKemKey, WC_ML_KEM_512,
+                                    der, len, object);
+            if (ret != 0) {
+                ret = MlKemKeyTryDecode(&object->data.mlKemKey, WC_ML_KEM_768,
+                                        der, len, object);
+            }
+            if (ret != 0) {
+                ret = MlKemKeyTryDecode(&object->data.mlKemKey, WC_ML_KEM_1024,
+                                        der, len, object);
+            }
+            XMEMSET(der, 0, len);
+        }
+        if (der != NULL)
+            XFREE(der, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    }
+    else {
+        /* Decode Dilithium public key. */
+        ret = MlKemKeyTryDecode(&object->data.mlKemKey, WC_ML_KEM_512,
+                                object->keyData, object->keyDataLen,
+                                object);
+        if (ret != 0) {
+            ret = MlKemKeyTryDecode(&object->data.mlKemKey, WC_ML_KEM_768,
+                                    object->keyData, object->keyDataLen,
+                                    object);
+        }
+        if (ret != 0) {
+            ret = MlKemKeyTryDecode(&object->data.mlKemKey, WC_ML_KEM_1024,
+                                    object->keyData, object->keyDataLen,
+                                    object);
+        }
+    }
+    object->encoded = (ret != 0);
+
+    return ret;
+}
+
+/**
+ * Encode the ML-KEM key.
+ *
+ * Private keys are encoded and then encrypted.
+ *
+ * @param [in, out]  object  ML-KEM key object.
+ * @return  0 on success.
+ * @return  -ve on failure.
+ */
+static int wp11_Object_Encode_MlKemKey(WP11_Object* object)
+{
+    int ret;
+    word32 keyLen = 0;
+
+    if (object->objClass == CKO_PRIVATE_KEY) {
+        /* Get length of encoded private key. */
+        ret = wc_MlKemKey_PrivateKeySize(&object->data.mlKemKey, &keyLen);
+        if (ret == 0) {
+            object->keyDataLen = keyLen + AES_BLOCK_SIZE;
+        }
+    }
+    else {
+        /* Get length of encoded public key. */
+        ret = wc_MlKemKey_PublicKeySize(&object->data.mlKemKey, &keyLen);
+        if (ret == 0) {
+            object->keyDataLen = keyLen;
+        }
+    }
+
+    if (ret == 0) {
+        XFREE(object->keyData, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        /* Allocate buffer to hold encoded key. */
+        object->keyData = (unsigned char*)XMALLOC(object->keyDataLen, NULL,
+                                                       DYNAMIC_TYPE_TMP_BUFFER);
+        if (object->keyData == NULL)
+            ret = MEMORY_E;
+    }
+
+    if (ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
+        /* Encode private key. */
+        ret = wc_MlKemKey_EncodePrivateKey(&object->data.mlKemKey,
+                                           object->keyData, object->keyDataLen);
+        if (ret == 0) {
+            ret = wp11_EncryptData(object->keyData, object->keyData, ret,
+                                    object->slot->token.key,
+                                    sizeof(object->slot->token.key), object->iv,
+                                    sizeof(object->iv));
+        }
+    }
+    else if (ret == 0 && object->objClass == CKO_PUBLIC_KEY) {
+        /* Encode public key. */
+        ret = wc_MlKemKey_EncodePublicKey(&object->data.mlKemKey,
+                                          object->keyData, object->keyDataLen);
+    }
+
+    if (ret != 0) {
+        XFREE(object->keyData, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        object->keyData = NULL;
+        object->keyDataLen = 0;
+    }
+
+    return ret;
+}
+
+/**
+ * Load a ML-KEM key from storage.
+ *
+ * @param [in, out]  object   ML-KEM key object.
+ * @param [in]       tokenId  Id of token this key belongs to.
+ * @param [in]       objId    Id of object for token.
+ * @return  0 on success.
+ * @return  MEMORY_E when dynamic memory allocation fails.
+ * @return  BUFFER_E when loading fails.
+ * @return  NOT_AVAILABLE_E when unable to locate data.
+ */
+static int wp11_Object_Load_MlKemKey(WP11_Object* object, int tokenId,
+                                         int objId)
+{
+    int ret;
+    void* storage = NULL;
+    int storeType;
+
+    /* Determine store type - private keys may be encrypted. */
+    if (object->objClass == CKO_PRIVATE_KEY)
+        storeType = WOLFPKCS11_STORE_MLKEMKEY_PRIV;
+    else
+        storeType = WOLFPKCS11_STORE_MLKEMKEY_PUB;
+
+    /* Open access to ML-KEM key. */
+    ret = wp11_storage_open_readonly(storeType, tokenId, objId, &storage);
+    if (ret == 0) {
+        /* Read DER encoded ML-KEM key. */
+        ret = wp11_storage_read_alloc_array(storage, &object->keyData,
+                                                           &object->keyDataLen);
+        wp11_storage_close(storage);
+    }
+
+    return ret;
+}
+
+/**
+ * Store a ML-KEM key to storage.
+ *
+ * @param [in]  object   ML-KEM key object.
+ * @param [in]  tokenId  Id of token this key belongs to.
+ * @param [in]  objId    Id of object for token.
+ * @return  0 on success.
+ * @return  MEMORY_E when dynamic memory allocation fails.
+ * @return  BUFFER_E when storing fails.
+ * @return  NOT_AVAILABLE_E when unable to write data.
+ */
+static int wp11_Object_Store_MlKemKey(WP11_Object* object, int tokenId,
+                                          int objId)
+{
+    int ret;
+    void* storage = NULL;
+    int storeType;
+
+    if (object->keyData == NULL) {
+        ret = wp11_Object_Encode_MlKemKey(object);
+    }
+
+    /* Determine store type - private keys may be encrypted. */
+    if (object->objClass == CKO_PRIVATE_KEY)
+        storeType = WOLFPKCS11_STORE_MLKEMKEY_PRIV;
+    else
+        storeType = WOLFPKCS11_STORE_MLKEMKEY_PUB;
+
+    /* Open access to ML-KEM key. */
+    ret = wp11_storage_open(storeType, tokenId, objId, object->keyDataLen,
+                            &storage);
+    if (ret == 0) {
+        /* Write encoded ML-KEM key to storage. */
+        ret = wp11_storage_write_array(storage, object->keyData,
+                                                            object->keyDataLen);
+
+        wp11_storage_close(storage);
+    }
+
+    return ret;
+}
+#endif /* HAVE_MLKEM */
+
 /**
  * Decode the symmetric key - requires decryption.
  *
@@ -3381,6 +3624,11 @@ static int wp11_Object_Load(WP11_Object* object, int tokenId, int objId)
                     ret = wp11_Object_Load_DhKey(object, tokenId, objId);
                     break;
             #endif
+            #ifdef HAVE_MLKEM
+                case CKK_ML_KEM:
+                    ret = wp11_Object_Load_MlKemKey(object, tokenId, objId);
+                    break;
+            #endif
             #ifndef NO_AES
                 case CKK_AES:
             #endif
@@ -3517,6 +3765,11 @@ static int wp11_Object_Store(WP11_Object* object, int tokenId, int objId)
                     ret = wp11_Object_Store_DhKey(object, tokenId, objId);
                     break;
             #endif
+            #ifdef HAVE_MLKEM
+                case CKK_ML_KEM:
+                    ret = wp11_Object_Store_MlKemKey(object, tokenId, objId);
+                    break;
+            #endif
             #ifndef NO_AES
                 case CKK_AES:
             #endif
@@ -3570,6 +3823,11 @@ static int wp11_Object_Decode(WP11_Object* object)
         #ifndef NO_DH
             case CKK_DH:
                 ret = wp11_Object_Decode_DhKey(object);
+                break;
+        #endif
+        #ifdef HAVE_MLKEM
+            case CKK_ML_KEM:
+                ret = wp11_Object_Decode_MlKemKey(object);
                 break;
         #endif
         #ifndef NO_AES
@@ -3639,6 +3897,15 @@ static int wp11_Object_Encode(WP11_Object* object, int protect)
                 ret = wp11_Object_Encode_DhKey(object);
                 if (protect && ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
                     XMEMSET(object->data.dhKey.key, 0, object->data.dhKey.len);
+                    object->encoded = 1;
+                }
+                break;
+        #endif
+        #ifdef HAVE_MLKEM
+            case CKK_ML_KEM:
+                ret = wp11_Object_Encode_MlKemKey(object);
+                if (protect && ret == 0 && object->objClass == CKO_PRIVATE_KEY) {
+                    wc_MlKemKey_Free(&object->data.mlKemKey);
                     object->encoded = 1;
                 }
                 break;
@@ -3716,6 +3983,14 @@ static void wp11_Object_Unstore(WP11_Object* object, int tokenId, int objId)
                 storeObjType = WOLFPKCS11_STORE_DHKEY_PRIV;
             else
                 storeObjType = WOLFPKCS11_STORE_DHKEY_PUB;
+            break;
+    #endif
+    #ifdef HAVE_MLKEM
+        case CKK_ML_KEM:
+            if (object->objClass == CKO_PRIVATE_KEY)
+                storeObjType = WOLFPKCS11_STORE_MLKEMKEY_PRIV;
+            else
+                storeObjType = WOLFPKCS11_STORE_MLKEMKEY_PUB;
             break;
     #endif
     #ifndef NO_AES
@@ -5890,6 +6165,10 @@ void WP11_Object_Free(WP11_Object* object)
         if (object->type == CKK_DH)
             wc_FreeDhKey(&object->data.dhKey.params);
     #endif
+    #ifdef HAVE_MLKEM
+        if (object->type == CKK_ML_KEM)
+            wc_MlKemKey_Free(&object->data.mlKemKey);
+    #endif
         if (object->type == CKK_AES || object->type == CKK_GENERIC_SECRET)
             XMEMSET(object->data.symmKey.data, 0, object->data.symmKey.len);
     }
@@ -6344,6 +6623,71 @@ int WP11_Object_SetDhKey(WP11_Object* object, unsigned char** data,
     return ret;
 }
 #endif
+
+#ifdef HAVE_MLKEM
+/**
+ * Set the ML-KEM key data into the object.
+ * Store the data in the wolfCrypt data structure.
+ *
+ * @param  object  [in]  Object object.
+ * @param  data    [in]  Array of byte arrays.
+ * @param  len     [in]  Array of lengths of byte arrays.
+ * @return  -ve on failure.
+ *          0 on success.
+ */
+int WP11_Object_SetMlKemKey(WP11_Object* object, unsigned char** data,
+                            CK_ULONG* len)
+{
+    int ret;
+    MlKemKey* key;
+    CK_ML_KEM_PARAMETER_SET_TYPE* params;
+
+    if (data[0] == NULL)
+        return BAD_FUNC_ARG;
+
+    if (len[0] != sizeof(CK_ML_KEM_PARAMETER_SET_TYPE))
+        return BUFFER_E;
+
+    if (object->onToken)
+        WP11_Lock_LockRW(object->lock);
+
+    key = &object->data.mlKemKey;
+    params = (CK_ML_KEM_PARAMETER_SET_TYPE*) data[0];
+
+    /* Init ML-KEM key with type based on the parameter */
+    switch (*params) {
+        case CKP_ML_KEM_512:
+            ret = wc_MlKemKey_Init(key, WC_ML_KEM_512, NULL, object->slot->devId);
+            break;
+        case CKP_ML_KEM_768:
+            ret = wc_MlKemKey_Init(key, WC_ML_KEM_768, NULL, object->slot->devId);
+            break;
+        case CKP_ML_KEM_1024:
+            ret = wc_MlKemKey_Init(key, WC_ML_KEM_1024, NULL, object->slot->devId);
+            break;
+        default:
+            ret = ASN_PARSE_E;
+    }
+
+    /* Set key data */
+    if (ret == 0 && data[1] != NULL) {
+        if (object->objClass == CKO_PUBLIC_KEY) {
+            ret = wc_MlKemKey_DecodePublicKey(key, data[1], len[1]);
+        }
+        else {
+            ret = wc_MlKemKey_DecodePrivateKey(key, data[1], len[1]);
+        }
+    }
+
+    if (ret != 0)
+        wc_MlKemKey_Free(key);
+
+    if (object->onToken)
+        WP11_Lock_UnlockRW(object->lock);
+
+    return ret;
+}
+#endif /* HAVE_MLKEM */
 
 /**
  * Set the DH key data into the object.
@@ -7052,6 +7396,145 @@ static int DhObject_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type,
 }
 #endif /* !NO_DH */
 
+#ifdef HAVE_MLKEM
+static int GetMlKemParams(MlKemKey* key, byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+    CK_ML_KEM_PARAMETER_SET_TYPE params;
+
+    if (len == NULL)
+        return BUFFER_E;
+
+    switch (key->type) {
+        case WC_ML_KEM_512:
+            params = CKP_ML_KEM_512;
+            break;
+        case WC_ML_KEM_768:
+            params = CKP_ML_KEM_768;
+            break;
+        case WC_ML_KEM_1024:
+            params = CKP_ML_KEM_1024;
+            break;
+        default:
+            return ASN_PARSE_E;
+    }
+
+    if (data == NULL)
+        *len = sizeof(CK_ML_KEM_PARAMETER_SET_TYPE);
+    else if (*len < sizeof(CK_ML_KEM_PARAMETER_SET_TYPE))
+        ret = BUFFER_E;
+    else
+        XMEMCPY(data, &params, sizeof(CK_ML_KEM_PARAMETER_SET_TYPE));
+
+    return ret;
+}
+
+static int GetMlKemPublicKey(MlKemKey* key, byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+    word32 dataLen = 0;
+
+    if (key->type == WC_ML_KEM_512)
+        dataLen = WC_ML_KEM_512_PUBLIC_KEY_SIZE;
+    else if (key->type == WC_ML_KEM_768)
+        dataLen = WC_ML_KEM_768_PUBLIC_KEY_SIZE;
+    else if (key->type == WC_ML_KEM_1024)
+        dataLen = WC_ML_KEM_1024_PUBLIC_KEY_SIZE;
+    else
+        return ASN_PARSE_E;
+
+    if (data == NULL)
+        *len = dataLen;
+    else if (*len < dataLen)
+        ret = BUFFER_E;
+    else {
+        ret = wc_MlKemKey_EncodePublicKey(key, data, dataLen);
+        if (ret == 0)
+            *len = dataLen;
+    }
+
+    return ret;
+}
+
+static int GetMlKemPrivateKey(MlKemKey* key, byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+    word32 dataLen = 0;
+
+    if (key->type == WC_ML_KEM_512)
+        dataLen = WC_ML_KEM_512_PRIVATE_KEY_SIZE;
+    else if (key->type == WC_ML_KEM_768)
+        dataLen = WC_ML_KEM_768_PRIVATE_KEY_SIZE;
+    else if (key->type == WC_ML_KEM_1024)
+        dataLen = WC_ML_KEM_1024_PRIVATE_KEY_SIZE;
+    else
+        return ASN_PARSE_E;
+
+    if (data == NULL)
+        *len = dataLen;
+    else if (*len < dataLen)
+        ret = BUFFER_E;
+    else {
+        ret = wc_MlKemKey_EncodePrivateKey(key, data, dataLen);
+        if (ret == 0)
+            *len = dataLen;
+    }
+
+    return ret;
+}
+
+/**
+ * Get a ML-KEM object's data as an attribute.
+ *
+ * @param  object  [in]      Object object.
+ * @param  type    [in]      Attribute type.
+ * @param  data    [in]      Attribute data buffer.
+ * @param  len     [in,out]  On in, length of attribute data buffer in bytes.
+ *                           On out, length of attribute data in bytes.
+ * @return  BUFFER_E when buffer is too small for data.
+ *          NOT_AVAILABLE_E when attribute type is not supported.
+ *          0 on success.
+ */
+static int MlKemObject_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type,
+                               byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+    int noPriv = (((object->flag & WP11_FLAG_SENSITIVE) != 0) ||
+                                 ((object->flag & WP11_FLAG_EXTRACTABLE) == 0));
+    int noPub = 0;
+
+    if (!(object->data.mlKemKey.flags & MLKEM_FLAG_PRIV_SET))
+        noPriv = 1;
+    if (!(object->data.mlKemKey.flags & MLKEM_FLAG_PUB_SET))
+        noPub = 1;
+
+    switch (type) {
+        case CKA_PARAMETER_SET:
+            ret = GetMlKemParams(&object->data.mlKemKey, data, len);
+            break;
+        case CKA_VALUE:
+            if (object->objClass == CKO_PRIVATE_KEY) {
+                if (noPriv)
+                    *len = CK_UNAVAILABLE_INFORMATION;
+                else
+                    ret = GetMlKemPrivateKey(&object->data.mlKemKey, data, len);
+            }
+            else if (object->objClass == CKO_PUBLIC_KEY) {
+                if (noPub)
+                    *len = CK_UNAVAILABLE_INFORMATION;
+                else
+                    ret = GetMlKemPublicKey(&object->data.mlKemKey, data, len);
+            }
+            break;
+        default:
+            ret = NOT_AVAILABLE_E;
+            break;
+    }
+
+    return ret;
+}
+#endif /* HAVE_MLKEM */
+
 /**
  * Get a secret object's data as an attribute.
  *
@@ -7255,6 +7738,11 @@ int WP11_Object_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
         #ifndef NO_DH
                         case CKK_DH:
                             ret = DhObject_GetAttr(object, type, data, len);
+                            break;
+        #endif
+        #ifdef HAVE_MLKEM
+                        case CKK_ML_KEM:
+                            ret = MlKemObject_GetAttr(object, type, data, len);
                             break;
         #endif
         #ifndef NO_AES
@@ -7560,6 +8048,9 @@ int WP11_Object_SetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
 #ifndef NO_DH
                 case CKK_DH:
 #endif
+#ifdef HAVE_MLKEM
+                case CKK_ML_KEM:
+#endif
 #ifndef NO_AES
                 case CKK_AES:
 #endif
@@ -7597,10 +8088,25 @@ int WP11_Object_SetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
             }
             break;
         case CKA_PARAMETER_SET:
+            switch (object->type) {
 #ifdef HAVE_DILITHIUM
-            if (object->type != CKK_ML_DSA)
+            case CKK_ML_DSA:
+                break;
 #endif
+#ifdef HAVE_MLKEM
+            case CKK_ML_KEM:
+                break;
+#endif
+            default:
                 ret = BAD_FUNC_ARG;
+                break;
+            }
+            break;
+        case CKA_ENCAPSULATE:
+            WP11_Object_SetOpFlag(object, CKF_ENCAPSULATE, *(CK_BBOOL*)data);
+            break;
+        case CKA_DECAPSULATE:
+            WP11_Object_SetOpFlag(object, CKF_DECAPSULATE, *(CK_BBOOL*)data);
             break;
         default:
             ret = BAD_FUNC_ARG;
@@ -8920,6 +9426,141 @@ int WP11_Dh_Derive(unsigned char* pub, word32 pubLen, unsigned char* key,
     return ret;
 }
 #endif /* !NO_DH */
+
+#ifdef HAVE_MLKEM
+int WP11_MlKem_GenerateKeyPair(WP11_Object* pub, WP11_Object* priv,
+                               WP11_Slot* slot)
+{
+    int ret = 0;
+    byte* pubKey = NULL;
+    word32 pubKeyLen = 0;
+    WC_RNG rng;
+
+    /* Both MlKemKey objects inside the pub and priv WP11_Objects are
+     * already initialized and set to a proper level within
+     * WP11_Object_SetMlKemKey() based on the given parameter set. */
+
+    /* Generate into the private key. */
+    ret = Rng_New(&slot->token.rng, &slot->token.rngLock, &rng);
+    if (ret == 0) {
+        ret = wc_MlKemKey_MakeKey(&priv->data.mlKemKey, &rng);
+        Rng_Free(&rng);
+    }
+    if (ret == 0) {
+        ret = wc_MlKemKey_PublicKeySize(&priv->data.mlKemKey, &pubKeyLen);
+    }
+    if (ret == 0) {
+        /* Allocate memory for the public key */
+        pubKey = XMALLOC(pubKeyLen, NULL, DYNAMIC_TYPE_PUBLIC_KEY);
+        if (pubKey == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (ret == 0) {
+        /* Export the public key */
+        ret = wc_MlKemKey_EncodePublicKey(&priv->data.mlKemKey, pubKey, pubKeyLen);
+    }
+    if (ret == 0) {
+        /* Copy the public part into public key. */
+        ret = wc_MlKemKey_DecodePublicKey(&pub->data.mlKemKey, pubKey, pubKeyLen);
+    }
+    if (ret == 0) {
+        priv->local = 1;
+        pub->local = 1;
+        priv->keyGenMech = CKM_ML_KEM_KEY_PAIR_GEN;
+        pub->keyGenMech = CKM_ML_KEM_KEY_PAIR_GEN;
+    }
+
+    if (pubKey != NULL) {
+        XFREE(pubKey, NULL, DYNAMIC_TYPE_PUBLIC_KEY);
+    }
+
+    return ret;
+}
+
+
+int WP11_MlKem_Encapsulate(WP11_Object* pub, unsigned char** sharedSecet, word32* ssLen,
+                           CK_BYTE_PTR pCiphertext, CK_ULONG_PTR pulCiphertextLen)
+{
+    int ret;
+    WC_RNG rng;
+    MlKemKey* mlKemKey = &pub->data.mlKemKey;
+    word32 ctLen = 0;
+
+    *sharedSecet = NULL;
+
+    if (pub->onToken)
+        WP11_Lock_LockRO(pub->lock);
+
+    ret = wc_MlKemKey_SharedSecretSize(mlKemKey, ssLen);
+    if (ret == 0) {
+        *sharedSecet = XMALLOC(*ssLen, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (*sharedSecet == NULL) {
+            ret = CKR_DEVICE_MEMORY;
+        }
+    }
+    if (ret == 0) {
+        ret = wc_MlKemKey_CipherTextSize(mlKemKey, &ctLen);
+    }
+
+    if (ret == 0) {
+        *pulCiphertextLen = ctLen;
+        ret = Rng_New(&pub->slot->token.rng, &pub->slot->token.rngLock, &rng);
+    }
+    if (ret == 0) {
+        ret = wc_MlKemKey_Encapsulate(mlKemKey, pCiphertext, *sharedSecet, &rng);
+        Rng_Free(&rng);
+    }
+
+    if (ret != 0) {
+        if (*sharedSecet != NULL) {
+            XFREE(*sharedSecet, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+            *sharedSecet = NULL;
+        }
+    }
+
+    if (pub->onToken)
+        WP11_Lock_UnlockRO(pub->lock);
+
+    return ret;
+}
+
+int WP11_MlKem_Decapsulate(WP11_Object* priv, unsigned char** sharedSecet, word32* ssLen,
+                           CK_BYTE_PTR pCiphertext, CK_ULONG ulCiphertextLen)
+{
+    int ret;
+    MlKemKey* mlKemKey = &priv->data.mlKemKey;
+
+    *sharedSecet = NULL;
+
+    if (priv->onToken)
+        WP11_Lock_LockRO(priv->lock);
+
+    ret = wc_MlKemKey_SharedSecretSize(mlKemKey, ssLen);
+    if (ret == 0) {
+        *sharedSecet = XMALLOC(*ssLen, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (*sharedSecet == NULL) {
+            ret = CKR_DEVICE_MEMORY;
+        }
+    }
+
+    if (ret == 0) {
+        ret = wc_MlKemKey_Decapsulate(mlKemKey, *sharedSecet, pCiphertext, ulCiphertextLen);
+    }
+
+    if (ret != 0) {
+        if (*sharedSecet != NULL) {
+            XFREE(*sharedSecet, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+            *sharedSecet = NULL;
+        }
+    }
+
+    if (priv->onToken)
+        WP11_Lock_UnlockRO(priv->lock);
+
+    return ret;
+}
+#endif /* HAVE_MLKEM */
 
 #ifndef NO_AES
 /**
