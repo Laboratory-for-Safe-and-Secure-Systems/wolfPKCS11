@@ -1095,3 +1095,57 @@ CK_RV C_SessionCancel(CK_SESSION_HANDLE hSession, CK_FLAGS flags)
 
     return CKR_FUNCTION_NOT_SUPPORTED;
 }
+
+CK_RV C_GetSessionValidationFlags(CK_SESSION_HANDLE hSession, CK_ULONG type,
+                                  CK_FLAGS * pFlags)
+{
+    if (!WP11_Library_IsInitialized())
+        return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+    (void)hSession;
+    (void)type;
+    (void)pFlags;
+
+    return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+CK_RV C_AsyncComplete(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pFunctionName,
+                      CK_ASYNC_DATA_PTR pResult)
+{
+    if (!WP11_Library_IsInitialized())
+        return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+    (void)hSession;
+    (void)pFunctionName;
+    (void)pResult;
+
+    return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+CK_RV C_AsyncGetID(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pFunctionName,
+                   CK_ULONG_PTR pulID)
+{
+    if (!WP11_Library_IsInitialized())
+        return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+    (void)hSession;
+    (void)pFunctionName;
+    (void)pulID;
+
+    return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+CK_RV C_AsyncJoin(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pFunctionName,
+                  CK_ULONG ulID, CK_BYTE_PTR pData, CK_ULONG ulData)
+{
+    if (!WP11_Library_IsInitialized())
+        return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+    (void)hSession;
+    (void)pFunctionName;
+    (void)ulID;
+    (void)pData;
+    (void)ulData;
+
+    return CKR_FUNCTION_NOT_SUPPORTED;
+}
