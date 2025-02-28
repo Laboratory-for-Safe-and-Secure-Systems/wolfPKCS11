@@ -5191,7 +5191,7 @@ int WP11_Session_AddObject(WP11_Session* session, int onToken,
         }
     #ifndef WOLFPKCS11_NO_STORE
         if (ret == 0) {
-            wp11_Slot_Store(session->slot, (int)session->slotId);
+            ret = wp11_Slot_Store(session->slot, (int)session->slotId);
         }
     #endif
         WP11_Lock_UnlockRW(&token->lock);
