@@ -1068,3 +1068,30 @@ CK_RV C_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot,
     return CKR_FUNCTION_NOT_SUPPORTED;
 }
 
+CK_RV C_LoginUser(CK_SESSION_HANDLE hSession, CK_USER_TYPE userType,
+                  CK_UTF8CHAR_PTR pPin, CK_ULONG ulPinLen,
+                  CK_UTF8CHAR_PTR pUsername, CK_ULONG ulUsernameLen)
+{
+    if (!WP11_Library_IsInitialized())
+        return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+    (void)hSession;
+    (void)userType;
+    (void)pPin;
+    (void)ulPinLen;
+    (void)pUsername;
+    (void)ulUsernameLen;
+
+    return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+CK_RV C_SessionCancel(CK_SESSION_HANDLE hSession, CK_FLAGS flags)
+{
+    if (!WP11_Library_IsInitialized())
+        return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+    (void)hSession;
+    (void)flags;
+
+    return CKR_FUNCTION_NOT_SUPPORTED;
+}
