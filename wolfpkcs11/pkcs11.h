@@ -255,6 +255,7 @@ extern "C" {
 #define CKM_AES_GCM                           0x00001087UL
 #define CKM_AES_CCM                           0x00001088UL
 #define CKM_AES_ECB                           0x000001081L
+#define CKM_HKDF_DERIVE                       0x0000402aUL
 #define CKM_ML_KEM_KEY_PAIR_GEN               0x0000000fUL
 #define CKM_ML_KEM                            0x00000017UL
 #define CKM_ML_DSA_KEY_PAIR_GEN               0x0000001cUL
@@ -599,6 +600,23 @@ typedef struct CK_ASYNC_DATA {
 } CK_ASYNC_DATA;
 typedef CK_ASYNC_DATA* CK_ASYNC_DATA_PTR;
 
+/* HKDF params */
+typedef struct CK_HKDF_PARAMS {
+    CK_BBOOL bExtract;
+    CK_BBOOL bExpand;
+    CK_MECHANISM_TYPE prfHashMechanism;
+    CK_ULONG ulSaltType;
+    CK_BYTE_PTR pSalt;
+    CK_ULONG ulSaltLen;
+    CK_OBJECT_HANDLE hSaltKey;
+    CK_BYTE_PTR pInfo;
+    CK_ULONG ulInfoLen;
+ } CK_HKDF_PARAMS;
+ typedef CK_HKDF_PARAMS* CK_HKDF_PARAMS_PTR;
+
+ #define CKF_HKDF_SALT_NULL   0x00000001UL
+ #define CKF_HKDF_SALT_DATA   0x00000002UL
+ #define CKF_HKDF_SALT_KEY    0x00000004UL
 
 /* generic PQ mechanism parameters */
 typedef CK_ULONG CK_HEDGE_TYPE; /* CK_HEDGE_TYPE currently not in header, but  CK_HEDGE_TYPES !!! */

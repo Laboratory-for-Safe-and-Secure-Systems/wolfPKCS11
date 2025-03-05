@@ -85,7 +85,7 @@
 #define WP11_MAX_DH_KEY_SZ             (4096/8)
 
 /* Maximum size of storage for generated/derived symmetric key. */
-#ifndef NO_DH
+#if !defined(NO_DH) || (!defined(NO_HMAC) && defined(HAVE_HKDF))
 #define WP11_MAX_SYM_KEY_SZ            (4096/8)
 #elif defined(HAVE_ECC)
 #define WP11_MAX_SYM_KEY_SZ            ((521+7)/8)
@@ -11012,6 +11012,105 @@ int WP11_Hmac_VerifyFinal(unsigned char* sig, word32 sigLen, int* stat,
 
     return ret;
 }
+
+#ifdef HAVE_HKDF
+int WP11_Hkdf_Derive(CK_HKDF_PARAMS* params, unsigned char** derivedKey,
+                     word32* derivedLen, CK_ATTRIBUTE_PTR pTemplate,
+                     CK_ULONG ulCount, WP11_Object* baseKey)
+{
+    int ret = 0;
+    int hashType;
+    WP11_Data* symmKey = &baseKey->data.symmKey;
+    byte* salt = NULL;
+    word32 saltLen = 0;
+    int derivedKeyLen;
+
+    if (baseKey->onToken)
+        WP11_Lock_LockRO(baseKey->lock);
+
+    /* Determine the hash type */
+    ret = wp11_hmac_hash_type(params->prfHashMechanism, &hashType);
+
+    /* Determine length of derived key */
+    if (ret == 0) {
+        if (params->bExpand) {
+            int i;
+            derivedKeyLen = -1;
+
+            /* Desired length is in the template of the new key */
+            for (i = 0; i < (int)ulCount; i++) {
+                if ((pTemplate[i].type == CKA_VALUE_LEN) &&
+                    (pTemplate[i].ulValueLen == sizeof(CK_ULONG))) {
+                    derivedKeyLen = *(CK_ULONG*)pTemplate[i].pValue;
+                }
+            }
+        }
+        else {
+            /* Desired length is the one of the underlying hash function */
+            derivedKeyLen = wc_HashGetDigestSize(hashType);
+        }
+
+        if (derivedKeyLen < 0)
+            ret = BAD_FUNC_ARG;
+        else
+            *derivedLen = derivedKeyLen;
+    }
+
+    /* Allocate memory for derived key */
+    if (ret == 0) {
+        *derivedKey = (unsigned char*)XMALLOC(*derivedLen, NULL,
+                                            DYNAMIC_TYPE_TMP_BUFFER);
+        if (*derivedKey == NULL)
+            ret = CKR_DEVICE_MEMORY;
+    }
+
+    if (params->ulSaltType == CKF_HKDF_SALT_DATA) {
+        salt = params->pSalt;
+        saltLen = params->ulSaltLen;
+    }
+    else if (params->ulSaltType == CKF_HKDF_SALT_NULL) {
+        salt = NULL;
+        saltLen = 0;
+    }
+    else {
+        ret = BAD_FUNC_ARG;
+    }
+
+    if (ret == 0) {
+        if (params->bExtract && params->bExpand) {
+            /* Extract and expand */
+            ret = wc_HKDF(hashType, symmKey->data, symmKey->len, salt, saltLen,
+                          params->pInfo, params->ulInfoLen, *derivedKey,
+                          *derivedLen);
+        }
+        else if (params->bExtract) {
+            /* Extract only */
+            ret = wc_HKDF_Extract(hashType, salt, saltLen, symmKey->data,
+                                  symmKey->len,  *derivedKey);
+        }
+        else if (params->bExpand) {
+            /* Expand only */
+            ret = wc_HKDF_Expand(hashType, symmKey->data, symmKey->len,
+                                params->pInfo, params->ulInfoLen, *derivedKey,
+                                *derivedLen);
+        }
+        else
+            ret = BAD_FUNC_ARG;
+    }
+
+    if (ret != 0) {
+        if (*derivedKey != NULL) {
+            XFREE(*derivedKey, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+            *derivedKey = NULL;
+        }
+    }
+
+    if (baseKey->onToken)
+        WP11_Lock_UnlockRO(baseKey->lock);
+
+    return ret;
+}
+#endif /* HAVE_HKDF */
 #endif /* !NO_HMAC */
 
 /**

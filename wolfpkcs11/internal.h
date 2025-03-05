@@ -458,6 +458,10 @@ int WP11_Hmac_SignFinal(unsigned char* sig, word32* sigLen,
 int WP11_Hmac_VerifyFinal(unsigned char* sig, word32 sigLen, int* stat,
                           WP11_Session* session);
 
+int WP11_Hkdf_Derive(CK_HKDF_PARAMS* params, unsigned char** derivedKey,
+                     word32* derivedLen, CK_ATTRIBUTE_PTR pTemplate,
+                     CK_ULONG ulCount, WP11_Object* baseKey);
+
 int WP11_Slot_SeedRandom(WP11_Slot* slot, unsigned char* seed, int seedLen);
 int WP11_Slot_GenerateRandom(WP11_Slot* slot, unsigned char* data, int len);
 

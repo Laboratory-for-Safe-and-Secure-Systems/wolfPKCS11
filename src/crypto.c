@@ -4577,12 +4577,34 @@ CK_RV C_DeriveKey(CK_SESSION_HANDLE hSession,
                 rv = CKR_FUNCTION_FAILED;
             break;
 #endif
+#if !defined(NO_HMAC) && defined(HAVE_HKDF)
+        case CKM_HKDF_DERIVE: {
+            CK_HKDF_PARAMS* params;
+
+            if (pMechanism->pParameter == NULL)
+                return CKR_MECHANISM_PARAM_INVALID;
+            if (pMechanism->ulParameterLen != sizeof(CK_HKDF_PARAMS))
+                 return CKR_MECHANISM_PARAM_INVALID;
+            params = (CK_HKDF_PARAMS*)pMechanism->pParameter;
+            if (params->bExpand == 0 && params->bExtract == 0)
+                return CKR_MECHANISM_PARAM_INVALID;
+
+            ret = WP11_Hkdf_Derive(params, &derivedKey, &keyLen, pTemplate,
+                                   ulAttributeCount, obj);
+            if (ret < 0)
+                rv = CKR_FUNCTION_FAILED;
+            else if (ret > 0)
+                rv = ret;
+            break;
+        }
+#endif
         default:
             (void)ulAttributeCount;
             return CKR_MECHANISM_INVALID;
     }
 
-#if defined(HAVE_ECC) || !defined(NO_DH)
+#if defined(HAVE_ECC) || !defined(NO_DH) || (defined(NO_HMAC) && \
+                                                            !defined(HAVE_HKDF))
     if (ret == 0) {
         rv = CreateObject(session, pTemplate, ulAttributeCount, &obj);
         if (rv == CKR_OK) {

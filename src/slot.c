@@ -465,7 +465,13 @@ static CK_MECHANISM_INFO hmacSha512MechInfo = {
     64, 512, CKF_SIGN | CKF_VERIFY
 };
 #endif
+#ifdef HAVE_HKDF
+/* Info on HKDF_DERIVE mechanism. */
+static CK_MECHANISM_INFO hkdfMechInfo = {
+    32, 512, CKF_DERIVE
+};
 #endif
+#endif /* NO_HMAC */
 
 /**
  * Get information on a mechanism.
@@ -602,7 +608,12 @@ CK_RV C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type,
             XMEMCPY(pInfo, &hmacSha512MechInfo, sizeof(CK_MECHANISM_INFO));
             break;
 #endif
+#ifdef HAVE_HKDF
+        case CKM_HKDF_DERIVE:
+            XMEMCPY(pInfo, &hkdfMechInfo, sizeof(CK_MECHANISM_INFO));
+            break;
 #endif
+#endif /* NO_HMAC */
         default:
             return CKR_MECHANISM_INVALID;
     }
