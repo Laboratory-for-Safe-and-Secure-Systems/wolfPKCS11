@@ -117,6 +117,13 @@ static CK_ATTRIBUTE_TYPE secretKeyParams[] = {
 /* Certificate data attributes */
 static CK_ATTRIBUTE_TYPE certParams[] = {
     CKA_CERTIFICATE_TYPE,
+    CKA_CERTIFICATE_CATEGORY,
+    CKA_SUBJECT,
+    CKA_ISSUER,
+    CKA_SERIAL_NUMBER,
+    CKA_NAME_HASH_ALGORITHM,
+    CKA_HASH_OF_SUBJECT_PUBLIC_KEY,
+    CKA_HASH_OF_ISSUER_PUBLIC_KEY,
     CKA_VALUE,
 };
 #define CERT_PARAMS_CNT     (sizeof(certParams)/sizeof(*certParams))

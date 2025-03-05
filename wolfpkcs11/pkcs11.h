@@ -390,6 +390,7 @@ typedef CK_ULONG*         CK_ULONG_PTR;
 typedef void*             CK_VOID_PTR;
 typedef CK_VOID_PTR*      CK_VOID_PTR_PTR;
 typedef CK_ULONG          CK_CERTIFICATE_TYPE;
+typedef CK_ULONG          CK_CERTIFICATE_CATEGORY;
 typedef CK_ULONG          CK_RV;
 
 

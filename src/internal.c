@@ -93,10 +93,6 @@
 #define WP11_MAX_SYM_KEY_SZ            64
 #endif
 
-#ifndef WP11_MAX_CERT_SZ
-#define WP11_MAX_CERT_SZ              4096
-#endif
-
 /* Sizes for storage. */
 #define WP11_MAX_IV_SZ                 16
 #define WP11_MAX_GCM_NONCE_SZ          16
@@ -156,6 +152,18 @@ typedef struct WP11_Cert {
     byte *data;                        /* Certificate data                    */
     word32 len;                        /* Length of certificate data in bytes */
     CK_CERTIFICATE_TYPE type;
+    CK_CERTIFICATE_CATEGORY category;
+    byte* subject;
+    int subjectLen;
+    byte* issuer;
+    int issuerLen;
+    byte* serial;
+    int serialLen;
+    CK_MECHANISM_TYPE hashAlgorithm;
+    byte* skid;
+    int skidLen;
+    byte* akid;
+    int akidLen;
 } WP11_Cert;
 
 #ifndef NO_DH
@@ -1739,7 +1747,44 @@ static int wp11_Object_Load_Cert(WP11_Object* object, int tokenId, int objId)
     if (ret == 0) {
         /* Read certificate. */
         ret = wp11_storage_read_alloc_array(storage, &object->keyData,
-            &object->keyDataLen);
+                                            &object->keyDataLen);
+        if (ret == 0) {
+            /* Read type (8) */
+            ret = wp11_storage_read_ulong(storage, &object->data.cert.type);
+        }
+        if (ret == 0) {
+            /* Read category (8) */
+            ret = wp11_storage_read_ulong(storage, &object->data.cert.category);
+        }
+        if (ret == 0) {
+            /* Read subject (variable) */
+            ret = wp11_storage_read_alloc_array(storage, &object->data.cert.subject,
+                                                &object->data.cert.subjectLen);
+        }
+        if (ret == 0) {
+            /* Read issuer (variable) */
+            ret = wp11_storage_read_alloc_array(storage, &object->data.cert.issuer,
+                                                &object->data.cert.issuerLen);
+        }
+        if (ret == 0) {
+            /* Read serial number (variable) */
+            ret = wp11_storage_read_alloc_array(storage, &object->data.cert.serial,
+                                                &object->data.cert.serialLen);
+        }
+        if (ret == 0) {
+            /* Read hash algorithm (8) */
+            ret = wp11_storage_read_ulong(storage, &object->data.cert.hashAlgorithm);
+        }
+        if (ret == 0) {
+            /* Read SKID */
+            ret = wp11_storage_read_alloc_array(storage, &object->data.cert.skid,
+                                                &object->data.cert.skidLen);
+        }
+        if (ret == 0) {
+            /* Read AKID */
+            ret = wp11_storage_read_alloc_array(storage, &object->data.cert.akid,
+                                                &object->data.cert.akidLen);
+        }
         wp11_storage_close(storage);
     }
 
@@ -2025,6 +2070,9 @@ static int wp11_Object_Store_Cert(WP11_Object* object, int tokenId, int objId)
 {
     int ret;
     void* storage = NULL;
+    int variableSz = (object->data.cert.len + object->data.cert.subjectLen +
+                      object->data.cert.issuerLen + object->data.cert.serialLen +
+                      object->data.cert.skidLen + object->data.cert.akidLen);
 
     if (object->data.cert.len <= 0) {
         ret = BAD_FUNC_ARG;
@@ -2033,11 +2081,48 @@ static int wp11_Object_Store_Cert(WP11_Object* object, int tokenId, int objId)
 
     /* Open access to cert. */
     ret = wp11_storage_open(WOLFPKCS11_STORE_CERT, tokenId, objId,
-        object->data.cert.len, &storage);
+                            variableSz, &storage);
     if (ret == 0) {
         /* Write cert to storage. */
         ret = wp11_storage_write_array(storage, object->data.cert.data,
                                                          object->data.cert.len);
+        if (ret == 0) {
+            /* Write certificate type (8) */
+            ret = wp11_storage_write_ulong(storage, object->data.cert.type);
+        }
+        if (ret == 0) {
+            /* Write certificate category (8) */
+            ret = wp11_storage_write_ulong(storage, object->data.cert.category);
+        }
+        if (ret == 0) {
+            /* Write certificate subject (variable) */
+            ret = wp11_storage_write_array(storage, object->data.cert.subject,
+                                           object->data.cert.subjectLen);
+        }
+        if (ret == 0) {
+            /* Write certificate issuer (variable) */
+            ret = wp11_storage_write_array(storage, object->data.cert.issuer,
+                                           object->data.cert.issuerLen);
+        }
+        if (ret == 0) {
+            /* Write certificate serial number (variable) */
+            ret = wp11_storage_write_array(storage, object->data.cert.serial,
+                                           object->data.cert.serialLen);
+        }
+        if (ret == 0) {
+            /* Write hash algorithm (8) */
+            ret = wp11_storage_write_ulong(storage, object->data.cert.hashAlgorithm);
+        }
+        if (ret == 0) {
+            /* Write certificate subject key identifier (variable) */
+            ret = wp11_storage_write_array(storage, object->data.cert.skid,
+                                           object->data.cert.skidLen);
+        }
+        if (ret == 0) {
+            /* Write certificate authority key identifier (variable) */
+            ret = wp11_storage_write_array(storage, object->data.cert.akid,
+                                           object->data.cert.akidLen);
+        }
         wp11_storage_close(storage);
     }
 
@@ -6758,16 +6843,113 @@ int WP11_Object_SetCert(WP11_Object* object, unsigned char** data,
     cert->len = 0;
 
     /* First item is certificate type */
-    if (ret == 0 && data[0] != NULL && len[0] != (int)sizeof(CK_ULONG))
+    if (ret == 0 && data[0] != NULL && len[0] != (int)sizeof(CK_CERTIFICATE_TYPE))
         ret = BAD_FUNC_ARG;
     if (ret == 0 && data[0] != NULL)
-        cert->type = (word32)*(CK_ULONG*)data[0];
+        cert->type = *(CK_CERTIFICATE_TYPE*)data[0];
 
-    /* Second item is certificate data (CKA_VALUE) */
-    if (ret == 0 && data[1] != NULL) {
-        cert->len = (word32)len[1];
+    /* Second item is certificate category */
+    if (ret == 0 && data[1] != NULL && len[1] != (int)sizeof(CK_CERTIFICATE_CATEGORY))
+        ret = BAD_FUNC_ARG;
+    if (ret == 0 && data[1] != NULL)
+        cert->category = *(CK_CERTIFICATE_CATEGORY*)data[1];
+
+    /* Subject */
+    if (ret == 0 && data[2] != NULL) {
+        cert->subjectLen = (word32)len[2];
     }
-    if (ret == 0 && data[1] != NULL) {
+    if (ret == 0 && data[2] != NULL) {
+        if (cert->subject != NULL) {
+            XFREE(cert->subject, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        }
+        cert->subject = (byte *)XMALLOC(cert->subjectLen, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (cert->subject == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (ret == 0 && data[2] != NULL) {
+        XMEMCPY(cert->subject, data[2], cert->subjectLen);
+    }
+
+    /* Issuer */
+    if (ret == 0 && data[3] != NULL) {
+        cert->issuerLen = (word32)len[3];
+    }
+    if (ret == 0 && data[3] != NULL) {
+        if (cert->issuer != NULL) {
+            XFREE(cert->issuer, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        }
+        cert->issuer = (byte *)XMALLOC(cert->issuerLen, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (cert->issuer == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (ret == 0 && data[3] != NULL) {
+        XMEMCPY(cert->issuer, data[3], cert->issuerLen);
+    }
+
+    /* Serial number */
+    if (ret == 0 && data[4] != NULL) {
+        cert->serialLen = (word32)len[4];
+    }
+    if (ret == 0 && data[4] != NULL) {
+        if (cert->serial!= NULL) {
+            XFREE(cert->serial, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        }
+        cert->serial = (byte *)XMALLOC(cert->serialLen, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (cert->serial == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (ret == 0 && data[4] != NULL) {
+        XMEMCPY(cert->serial, data[4], cert->serialLen);
+    }
+
+    /* Hash algorithm */
+    if (ret == 0 && data[5] != NULL && len[5] != (int)sizeof(CK_MECHANISM_TYPE))
+        ret = BAD_FUNC_ARG;
+    if (ret == 0 && data[5] != NULL)
+        cert->hashAlgorithm = *(CK_MECHANISM_TYPE*)data[5];
+
+    /* Subject public key hash (SKID) */
+    if (ret == 0 && data[6] != NULL) {
+        cert->skidLen = (word32)len[6];
+    }
+    if (ret == 0 && data[6] != NULL) {
+        if (cert->skid!= NULL) {
+            XFREE(cert->skid, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        }
+        cert->skid = (byte *)XMALLOC(cert->skidLen, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (cert->skid == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (ret == 0 && data[6] != NULL) {
+        XMEMCPY(cert->skid, data[6], cert->skidLen);
+    }
+
+    /* Issuer public key hash (AKID) */
+    if (ret == 0 && data[7] != NULL) {
+        cert->akidLen = (word32)len[7];
+    }
+    if (ret == 0 && data[7] != NULL) {
+        if (cert->akid!= NULL) {
+            XFREE(cert->akid, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        }
+        cert->akid = (byte *)XMALLOC(cert->akidLen, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (cert->akid == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (ret == 0 && data[7] != NULL) {
+        XMEMCPY(cert->akid, data[7], cert->akidLen);
+    }
+
+    /* Last item is certificate data (CKA_VALUE) */
+    if (ret == 0 && data[8] != NULL) {
+        cert->len = (word32)len[8];
+    }
+    if (ret == 0 && data[8] != NULL) {
         if (cert->data != NULL) {
             XFREE(cert->data, NULL, DYNAMIC_TYPE_CERT);
         }
@@ -6776,8 +6958,8 @@ int WP11_Object_SetCert(WP11_Object* object, unsigned char** data,
             ret = MEMORY_E;
         }
     }
-    if (ret == 0 && data[1] != NULL) {
-        XMEMCPY(cert->data, data[1], cert->len);
+    if (ret == 0 && data[8] != NULL) {
+        XMEMCPY(cert->data, data[8], cert->len);
     }
 
     if (object->onToken)
@@ -7576,6 +7758,65 @@ static int SecretObject_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type,
 }
 
 /**
+ * Get a certificate object's data as an attribute.
+ *
+ * @param  object  [in]      Object object.
+ * @param  type    [in]      Attribute type.
+ * @param  data    [in]      Attribute data buffer.
+ * @param  len     [in,out]  On in, length of attribute data buffer in bytes.
+ *                           On out, length of attribute data in bytes.
+ * @return  BUFFER_E when buffer is too small for data.
+ *          NOT_AVAILABLE_E when attribute type is not supported.
+ *          0 on success.
+ */
+static int CertObject_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type,
+    byte* data, CK_ULONG* len)
+{
+    int ret = 0;
+
+    switch (type) {
+        case CKA_CERTIFICATE_TYPE:
+            ret = GetULong(object->data.cert.type, data, len);
+            break;
+        case CKA_CERTIFICATE_CATEGORY:
+            ret = GetULong(object->data.cert.category, data, len);
+            break;
+        case CKA_SUBJECT:
+            ret = GetData((byte*)object->data.cert.subject,
+                          object->data.cert.subjectLen, data, len);
+            break;
+        case CKA_ISSUER:
+            ret = GetData((byte*)object->data.cert.issuer,
+                          object->data.cert.issuerLen, data, len);
+            break;
+        case CKA_SERIAL_NUMBER:
+            ret = GetData((byte*)object->data.cert.serial,
+                          object->data.cert.serialLen, data, len);
+            break;
+        case CKA_NAME_HASH_ALGORITHM:
+            ret = GetULong(object->data.cert.hashAlgorithm, data, len);
+            break;
+        case CKA_HASH_OF_SUBJECT_PUBLIC_KEY:
+            ret = GetData((byte*)object->data.cert.skid,
+                          object->data.cert.skidLen, data, len);
+            break;
+        case CKA_HASH_OF_ISSUER_PUBLIC_KEY:
+            ret = GetData((byte*)object->data.cert.akid,
+                          object->data.cert.akidLen, data, len);
+            break;
+        case CKA_VALUE:
+            ret = GetData((byte*)object->data.cert.data,
+                          object->data.cert.len, data, len);
+            break;
+        default:
+            ret = NOT_AVAILABLE_E;
+            break;
+    }
+
+    return ret;
+}
+
+/**
  * Get the data for an attribute from the object.
  *
  * @param  object  [in]      Object object.
@@ -7712,10 +7953,8 @@ int WP11_Object_GetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
 
         default:
             {
-                if ((object->objClass == CKO_CERTIFICATE) &&
-                    (type == CKA_VALUE)) {
-                    ret = GetData((byte*)object->data.cert.data,
-                                object->data.cert.len, data, len);
+                if (object->objClass == CKO_CERTIFICATE) {
+                    ret = CertObject_GetAttr(object, type, data, len);
                     break;
                 }
                 else {
@@ -8068,19 +8307,19 @@ int WP11_Object_SetAttr(WP11_Object* object, CK_ATTRIBUTE_TYPE type, byte* data,
             /* Handled in layer above */
             break;
         case CKA_CERTIFICATE_TYPE:
-            /* Handled in WP11_Object_SetCert */
-            break;
         case CKA_SUBJECT:
         case CKA_ISSUER:
         case CKA_SERIAL_NUMBER:
-        case CKA_AC_ISSUER:
-        case CKA_ATTR_TYPES:
         case CKA_CERTIFICATE_CATEGORY:
-        case CKA_JAVA_MIDP_SECURITY_DOMAIN:
-        case CKA_URL:
         case CKA_HASH_OF_SUBJECT_PUBLIC_KEY:
         case CKA_HASH_OF_ISSUER_PUBLIC_KEY:
         case CKA_NAME_HASH_ALGORITHM:
+            /* Handled in WP11_Object_SetCert */
+            break;
+        case CKA_AC_ISSUER:
+        case CKA_ATTR_TYPES:
+        case CKA_JAVA_MIDP_SECURITY_DOMAIN:
+        case CKA_URL:
         case CKA_CHECK_VALUE:
             /* Fields are allowed, but not saved yet */
             if (object->objClass != CKO_CERTIFICATE) {
